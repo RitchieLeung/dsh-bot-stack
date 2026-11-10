@@ -28,7 +28,8 @@
 
 ## 每日工作日报
 
-- 每只 Bot 一条排程任务，标题 `bot-daily-report:<botId>`，每天 **19:00（Asia/Shanghai）**。
+- **只有主 Bot 写日报**：`state.json` 的 `mainBotIds`（当前是鲸鱼），可用插件 config 的 `reportBotIds` 覆盖，兜底取第一个 Bot。其他 Bot 不排日报，只写自己的记忆和日记。
+- 主 Bot 一条排程任务，标题 `bot-daily-report:<botId>`，每天 **19:00（Asia/Shanghai）**。
 - 投递目标是该 Bot 当前的**前台 session**（`state.json` 的 `bots[].sessionId`）。
 - prompt 要求 Bot 调用 `remember` 写一条记忆：
   - `predicate = "daily-report"`
@@ -88,5 +89,6 @@ lib/client.js     浏览器插件：sidebar.panellist 图标 + main 面板
 | 面板显示「找不到记忆库」 | 库里路径不存在。检查 `~/.dsh/bot/knowledge/knowledge.sqlite`，或给插件配 `dbPath`。 |
 | 面板显示「读取失败」 | 读权限或 WAL 被独占。点「重试」；确认库文件可读。 |
 | 图标没出现 | 看浏览器 console 是否报 `__ModuleLoader__` 错误；确认 profile 的 bundles 含 `dsh-plugin-bot-knowledge`。 |
-| 日报排程 N/5 上不去 | Host 半取不到 `ctx.schedule`；确认 `dsh-web-app` 的 schedule 行已启用。 |
+| 日报排程上不去 | Host 半取不到 `ctx.schedule`；确认 `dsh-web-app` 的 schedule 行已启用。 |
+| 该写日报的 Bot 不对 | 改 `state.json` 的 `mainBotIds`，或在插件 config 里配 `reportBotIds: ['<botId>']`。 |
 | 某只 Bot 一直是「还没有记忆」 | 这只 Bot 确实没写过记忆（正常，例如新 Bot）。 |

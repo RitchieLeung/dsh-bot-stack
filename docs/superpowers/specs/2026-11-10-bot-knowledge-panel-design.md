@@ -123,6 +123,7 @@ window.__ModuleLoader__.load({ id: 'bot-knowledge', factory(require) {
 
 ### 4.5 日报
 
+- **范围**：**只有主 Bot 写日报**（`state.json` 的 `mainBotIds`，当前是鲸鱼；可用 config `reportBotIds` 覆盖）。其他 Bot 只写自己的记忆和日记，不排日报。
 - **时间**：每天 19:00（Asia/Shanghai），周日照写（周一那份可合并周末）。
 - **投递**：`ctx.schedule.create({ title, prompt, timing: {kind:'daily', daily:{time:'19:00', time_zone:'Asia/Shanghai'}}, target: {kind:'session', sessionId: <bot 当前前台 session>} })`
 - **prompt**：说明这是自动日报；要求用 `remember` 写一条 `predicate="daily-report"`、`topic=当天日期`、`kind="inference"`、`facets=["experience"]` 的记忆；正文三段（今天做了什么 / 卡在哪、需要谁配合 / 明天计划）；**不要回复给人**。
