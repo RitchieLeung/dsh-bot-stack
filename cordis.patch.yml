@@ -1,0 +1,8 @@
+# Bundle patch for dsh-plugin-bot-knowledge.
+#
+# Wired as a profile layer via `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`.
+# Override config by targeting the `bot-knowledge` id in the user's own patch layer.
+
+- insert:
+    - id: bot-knowledge
+      name: 'dsh-plugin-bot-knowledge'
