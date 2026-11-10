@@ -102,3 +102,21 @@ test('malformed times fall back to the default instead of reaching the schedule 
   assert.equal(normalizeTime('7:05'), '07:05:00');
   assert.equal(normalizeTime('19:00:30'), '19:00:30');
 });
+
+test('an ended task is recreated instead of reported as unchanged', async () => {
+  const schedule = fakeSchedule([
+    { ...existing('A', { sessionId: 'session-a', prompt: reportPrompt({ botName: '甲' }) }), status: 'ended' },
+  ]);
+  const results = await ensureDailyReportSchedules({ schedule, bots: [BOTS[0]] });
+  assert.equal(results[0].action, 'created');
+  assert.equal(schedule.calls.create.length, 1);
+});
+
+test('a paused task is respected and not recreated', async () => {
+  const schedule = fakeSchedule([
+    { ...existing('A', { sessionId: 'session-a', prompt: reportPrompt({ botName: '甲' }) }), status: 'paused' },
+  ]);
+  const results = await ensureDailyReportSchedules({ schedule, bots: [BOTS[0]] });
+  assert.equal(results[0].action, 'unchanged');
+  assert.equal(schedule.calls.create.length, 0);
+});
