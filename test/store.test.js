@@ -63,6 +63,19 @@ test('superseded memories are not listed as current', async () => {
   });
 });
 
+test('reporting bots come from mainBotIds, then config, then the first bot', async () => {
+  await withStore(async store => {
+    assert.deepEqual(store.reportBotIds(), ['A']);
+    assert.deepEqual(store.reportBotList().map(bot => bot.name), ['甲']);
+  });
+  const fixture = await makeFixture();
+  try {
+    const forced = openKnowledgeStore({ dbPath: fixture.dbPath, statePath: fixture.statePath, reportBotIds: ['B'] });
+    assert.deepEqual(forced.reportBotIds(), ['B']);
+    forced.close();
+  } finally { await fixture.cleanup(); }
+});
+
 test('reports() returns the daily report for one date', async () => {
   await withStore(async store => {
     const reports = store.reports({ date: '2026-11-10' });

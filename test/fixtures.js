@@ -41,6 +41,7 @@ export async function makeFixture() {
   db.close();
   await writeFile(statePath, JSON.stringify({
     version: 1,
+    mainBotIds: ['A'],
     bots: {
       A: { id: 'A', name: '甲', role: '职责甲', model: 'm1', sessionId: 'session-a' },
       B: { id: 'B', name: '乙', role: '职责乙', model: 'm2', sessionId: 'session-b' },

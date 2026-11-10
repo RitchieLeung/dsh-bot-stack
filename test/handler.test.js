@@ -106,11 +106,12 @@ test('schedules action lists only daily report tasks, with bot names', async () 
     assert.equal(result.ok, true);
     assert.equal(result.value.items.length, 1);
     assert.equal(result.value.items[0].botName, '甲');
-    assert.equal(result.value.bots.length, 2);
+    assert.deepEqual(result.value.reportBotIds, ['A']);
+    assert.equal(result.value.reportBots.length, 1);
   }, { schedule });
 });
 
-test('ensure-schedules action arms a task per bot', async () => {
+test('ensure-schedules arms only the reporting bot', async () => {
   const calls = [];
   const schedule = {
     async list() { return { items: [] }; },
@@ -120,8 +121,8 @@ test('ensure-schedules action arms a task per bot', async () => {
   await withHandler(async handle => {
     const result = await handle({ action: 'ensure-schedules' });
     assert.equal(result.ok, true);
-    assert.equal(result.value.results.length, 2);
-    assert.deepEqual(calls.map(call => call.target.sessionId), ['session-a', 'session-b']);
+    assert.equal(result.value.results.length, 1);
+    assert.deepEqual(calls.map(call => call.target.sessionId), ['session-a']);
     assert.equal(calls[0].timing.daily.time, '19:00:00');
   }, { schedule });
 });
