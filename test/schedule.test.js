@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureDailyReportSchedules, reportPrompt, reportTitle, REPORT_PREDICATE } from '../lib/schedule.js';
+import { ensureDailyReportSchedules, normalizeTime, reportPrompt, reportTitle, REPORT_PREDICATE } from '../lib/schedule.js';
 
 const BOTS = [
   { id: 'A', name: '甲', sessionId: 'session-a' },
@@ -87,4 +87,18 @@ test('the prompt tells the bot exactly how to write the report', () => {
   assert.match(prompt, /明天/);
   assert.match(prompt, /不要.*回复|不需要.*回复/);
   assert.equal(REPORT_PREDICATE, 'daily-report');
+});
+
+test('a short HH:mm time is normalised to HH:mm:ss', async () => {
+  const schedule = fakeSchedule();
+  await ensureDailyReportSchedules({ schedule, bots: [BOTS[0]], time: '19:00' });
+  assert.equal(schedule.calls.create[0].timing.daily.time, '19:00:00');
+});
+
+test('malformed times fall back to the default instead of reaching the schedule service', () => {
+  for (const bad of ['25:00', '19:60', 'noon', '', null, undefined, 19]) {
+    assert.equal(normalizeTime(bad), '19:00:00');
+  }
+  assert.equal(normalizeTime('7:05'), '07:05:00');
+  assert.equal(normalizeTime('19:00:30'), '19:00:30');
 });
