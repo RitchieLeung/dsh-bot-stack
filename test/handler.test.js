@@ -90,3 +90,38 @@ test('schedule actions report that scheduling is unavailable without a service',
     }
   });
 });
+
+test('schedules action lists only daily report tasks, with bot names', async () => {
+  const schedule = {
+    async list() {
+      return { items: [
+        { id: 's1', title: 'bot-daily-report:A', status: 'active', scheduledAt: '2026-11-11T11:00:00Z',
+          target: { kind: 'session', sessionId: 'session-a' } },
+        { id: 's2', title: 'some-other-task', status: 'active' },
+      ] };
+    },
+  };
+  await withHandler(async handle => {
+    const result = await handle({ action: 'schedules' });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.items.length, 1);
+    assert.equal(result.value.items[0].botName, '甲');
+    assert.equal(result.value.bots.length, 2);
+  }, { schedule });
+});
+
+test('ensure-schedules action arms a task per bot', async () => {
+  const calls = [];
+  const schedule = {
+    async list() { return { items: [] }; },
+    async create(request) { calls.push(request); return { id: `x${calls.length}`, ...request }; },
+    async edit(request) { calls.push(request); return request; },
+  };
+  await withHandler(async handle => {
+    const result = await handle({ action: 'ensure-schedules' });
+    assert.equal(result.ok, true);
+    assert.equal(result.value.results.length, 2);
+    assert.deepEqual(calls.map(call => call.target.sessionId), ['session-a', 'session-b']);
+    assert.equal(calls[0].timing.daily.time, '19:00');
+  }, { schedule });
+});
