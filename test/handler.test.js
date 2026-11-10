@@ -122,6 +122,6 @@ test('ensure-schedules action arms a task per bot', async () => {
     assert.equal(result.ok, true);
     assert.equal(result.value.results.length, 2);
     assert.deepEqual(calls.map(call => call.target.sessionId), ['session-a', 'session-b']);
-    assert.equal(calls[0].timing.daily.time, '19:00');
+    assert.equal(calls[0].timing.daily.time, '19:00:00');
   }, { schedule });
 });

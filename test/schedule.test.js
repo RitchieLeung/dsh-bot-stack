@@ -23,7 +23,7 @@ function existing(botId, { sessionId, prompt }) {
     title: reportTitle(botId),
     prompt,
     kind: 'daily',
-    time: '19:00',
+    time: '19:00:00',
     timeZone: 'Asia/Shanghai',
     target: { kind: 'session', sessionId },
     status: 'active',
@@ -37,7 +37,7 @@ test('an empty catalogue arms one daily task per bot', async () => {
   assert.deepEqual(results.map(r => r.action), ['created', 'created']);
   const request = schedule.calls.create[0];
   assert.equal(request.title, reportTitle('A'));
-  assert.deepEqual(request.timing, { kind: 'daily', daily: { time: '19:00', time_zone: 'Asia/Shanghai' } });
+  assert.deepEqual(request.timing, { kind: 'daily', daily: { time: '19:00:00', time_zone: 'Asia/Shanghai' } });
   assert.deepEqual(request.target, { kind: 'session', sessionId: 'session-a' });
 });
 
