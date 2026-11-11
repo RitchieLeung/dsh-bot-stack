@@ -120,3 +120,24 @@ test('a paused task is respected and not recreated', async () => {
   assert.equal(results[0].action, 'unchanged');
   assert.equal(schedule.calls.create.length, 0);
 });
+
+test('tasks left behind for bots that no longer owe a report are pruned', async () => {
+  const schedule = fakeSchedule([
+    existing('B', { sessionId: 'session-b', prompt: reportPrompt({ botName: '乙' }) }),
+  ]);
+  const results = await ensureDailyReportSchedules({ schedule, bots: [BOTS[0]] });
+  assert.equal(schedule.calls.create.length, 1, 'the reporting bot still gets a task');
+  const pruned = results.filter(result => result.action === 'pruned');
+  assert.deepEqual(pruned.map(result => result.botId), ['B']);
+  const deleted = schedule.calls.edit.filter(call => call.action === 'delete');
+  assert.deepEqual(deleted.map(call => call.id), ['sched-B']);
+});
+
+test('re-arming does not prune the reporting bot itself', async () => {
+  const schedule = fakeSchedule([
+    existing('A', { sessionId: 'session-a', prompt: reportPrompt({ botName: '甲' }) }),
+  ]);
+  const results = await ensureDailyReportSchedules({ schedule, bots: [BOTS[0]] });
+  assert.equal(results.filter(result => result.action === 'pruned').length, 0);
+  assert.equal(schedule.calls.edit.length, 0);
+});
