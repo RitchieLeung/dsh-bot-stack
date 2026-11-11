@@ -267,11 +267,6 @@ export class LocalAgentAdapter extends LlmAdapter {
     const system = messages.filter(message => message.role === 'system').map(message => textOf(message.content)).join('\n').trim()
     const promptHash = system === '' ? undefined : createHash('sha256').update(system).digest('hex')
     const mcp = await this.ensureMcp(live, () => this.deps.toolsFor(options))
-    // TEMP DEBUG (remove after diagnosis): how many team tools cross the bridge.
-    try {
-      const { appendFileSync } = await import('node:fs')
-      appendFileSync('/tmp/dscord-acp-debug.log', `${new Date().toISOString()} stream provider=${options.provider} sessionId=${options.sessionId} options.tools=${(options.tools ?? []).length} bridgeTools=${this.deps.toolsFor(options).length}\n`)
-    } catch {}
     const cwd = live.cwd ?? await this.deps.cwdFor(sessionId)
     live.cwd = cwd
 

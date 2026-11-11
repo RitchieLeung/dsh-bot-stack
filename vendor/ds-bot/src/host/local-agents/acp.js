@@ -2,12 +2,8 @@
 // stdio. A process multiplexes sessions: each DS Bot Session maps to one ACP
 // session, created or resumed with our loopback MCP server attached.
 import { spawn } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
 import { JsonRpcPeer, wireProcess, EventQueue } from './jsonrpc.js'
 import { cleanEnv } from './discover.js'
-
-// TEMP DEBUG (remove after diagnosis): trace MCP attachment for local agents.
-const dbg = (line) => { try { appendFileSync('/tmp/dscord-acp-debug.log', `${new Date().toISOString()} ${line}\n`) } catch {} }
 
 const CLIENT = { name: 'ds-bot', version: '1' }
 
@@ -62,7 +58,6 @@ export class AcpEngine {
     const mcpCaps = reply?.agentCapabilities?.mcpCapabilities
     this.caps = { mcpDeclared: mcpCaps !== undefined && mcpCaps !== null,
       mcpHttp: mcpCaps?.http === true, mcpSse: mcpCaps?.sse === true }
-    dbg(`ensure initialize agentInfo=${JSON.stringify(reply?.agentInfo ?? {})} mcpCapabilities=${JSON.stringify(mcpCaps)} caps=${JSON.stringify(this.caps)}`)
     return peer
   }
 
@@ -137,7 +132,6 @@ export class AcpEngine {
     const peer = await this.ensure()
     const session = this.sessionFor(dshSessionId)
     const mcpServers = mcp === undefined ? [] : [{ type: 'http', name: 'dsbot', url: mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${mcp.token}` }] }]
-    dbg(`open dshSessionId=${dshSessionId} resumeId=${resumeId} mcp=${mcp ? mcp.url : 'NONE'} mcpServers.length=${mcpServers.length} caps=${JSON.stringify(this.caps)}`)
     if (mcp !== undefined && this.caps.mcpDeclared && this.caps.mcpHttp === false) throw Object.assign(new Error(`${this.engine.name} cannot use HTTP MCP servers; the team tools cannot reach it`), { code: 'NOT_SUPPORTED' })
     const params = { cwd, mcpServers }
     let reply
