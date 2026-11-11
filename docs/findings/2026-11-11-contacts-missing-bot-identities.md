@@ -1,7 +1,7 @@
 # 为什么 `contacts` 查不到「鲸鱼」的稳定 ID
 
 日期：2026-11-11
-状态：**已定位，未修复**（属注册表数据/观测管线的设计缺口，非工具桥问题）。
+状态：**已修复**（2026-11-11 14:55，见文末「修复实施」）。
 
 ## 现象
 
@@ -37,3 +37,24 @@ kiki 调 `contacts(query:"鲸鱼")` 返回：
 - **C. 修自动整理**：记忆/审阅写 `subjectId`/`saidBy` 时，用 roster 解析出稳定 session id，而不是落名字。
 
 三者可叠加；A 最局部、见效最快。
+
+## 修复实施（2026-11-11 14:55）
+
+采纳 A + 视图兜底，两处改动：
+
+1. **`memory/native.mjs`**：新增 `ensureRosterContacts()`，在 `contacts` 工具执行前把
+   `rt.state.bots` 逐个 `store.contact({ id: 会话 id, name, kind:'bot', source:{eventId:'roster'} })`。
+   幂等（同名同 kind 直接跳过）。这样「鲸鱼」→ `session-a05e2e6a-…` 的映射就进了 contacts 表。
+2. **`memory/contacts.mjs`**：
+   - 带 `source.eventId === 'roster'` 观测的记录视为**团队全员可见**（不受「只露本 Bot 观测过的」过滤）。
+   - 老记忆把名字当 id 的 `knownId`，若命中已有记录的 `name/aliases`，不再生成回退记录。
+
+**验证**（DB 副本 + 真莹 botId）：
+
+```
+contacts("鲸鱼") → [{ "id":"session-a05e2e6a-b961-400c-94d4-24a40aa867a1",
+                      "kind":"bot", "name":"鲸鱼" }]
+```
+
+只剩真身份，回退记录消失。**注**：记忆里历史残留的 `saidBy:"鲸鱼"` 仍在（C 方案未做），
+但视图层已能把它解析到真记录，不影响 `contacts` 结果。
