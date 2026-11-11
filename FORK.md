@@ -35,6 +35,12 @@ Antigravity 的 `mcpCapabilities` 是 null（不声明），但 `session/new` �
 
 ACP agent 可能回报空字符串错误码，`??` 会把空串保留下来，`LlmError` 于是拒绝："code must be a non-empty string"。改成空串当作没有 code。
 
+### 6. 镜像回放不再塞入运行时上下文 — `vendor/ds-bot/src/host/local-agents/adapter.js`
+
+`renderReplay()` 为 CLI/ACP agent 重建对话时，把 DSH 注入的运行时上下文（记忆快照等）也当普通消息渲染，并**每条截断到 2,000 字符**。记忆快照是一整段 JSON，于是被切成半截，agent 把时间花在抱怨"上下文被截断"上（Antigravity 实测原话："你粘贴的会话上下文在 `currentClaims": [` 处截断了"）。
+
+改成用上游已有的 `isContextMessage()` 把这类消息排除出回放——它们是运行时注入，不是对话。
+
 ## 不是改在这里的问题
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。

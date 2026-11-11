@@ -511,7 +511,11 @@ function pickAllowOption(options, result) {
 function renderReplay(messages, system) {
   const picked = []
   let used = 0
-  const body = (messages ?? []).filter(message => message.role !== 'system')
+  // Fork: DSH injects runtime context (memory snapshots, tool notes) as user-role messages.
+  // Replaying them cut each one at 2,000 chars, so a JSON snapshot arrived as a half-cut
+  // blob and the agent spent its turn complaining about the truncation instead of working.
+  // They are not conversation: keep them out of the replay entirely.
+  const body = (messages ?? []).filter(message => message.role !== 'system' && !isContextMessage(message))
   const latest = body.at(-1)
   for (const message of [...body].reverse()) {
     const line = `${sourceLabel(message)}: ${textOf(message.content).slice(0, 2_000)}`
