@@ -25,12 +25,22 @@ export class CodexEngine {
     return thread
   }
 
-  async ensure() {
+  async ensure(mcp) {
     if (this.peer !== undefined) return this.peer
     const bin = this.findExecutable(this.engine.command)
     if (bin === undefined) throw Object.assign(new Error(`${this.engine.name} is not installed`), { code: 'NO_ADAPTER' })
-    const child = spawn(bin, this.engine.args ?? [], {
-      env: cleanEnv(this.engine.env ?? {}),
+    // Fork: Codex reads MCP servers only from process-level config (thread/start's
+    // config silently ignores mcp_servers). So each Codex session runs its own
+    // app-server (the adapter keys engines by session) and the session's loopback
+    // MCP server is injected on the command line, with its token in the env.
+    const args = [...(this.engine.args ?? [])]
+    let env = cleanEnv(this.engine.env ?? {})
+    if (mcp?.url && mcp?.token) {
+      args.push('-c', `mcp_servers.dsbot={url="${mcp.url}", bearer_token_env_var="DSBOT_MCP_TOKEN"}`)
+      env = cleanEnv({ ...(this.engine.env ?? {}), DSBOT_MCP_TOKEN: mcp.token })
+    }
+    const child = spawn(bin, args, {
+      env,
       stdio: ['pipe', 'pipe', 'inherit'],
       windowsHide: true,
     })
@@ -97,11 +107,15 @@ export class CodexEngine {
         })
       })
     }
+    // Fork: Codex asks the client to elicit user input for an MCP server (MCP
+    // `elicitation/create`). An unattended Bot has no one to ask, so decline; the
+    // request is otherwise rejected with -32601 and the turn logs a client error.
+    if (method === 'mcpServer/elicitation/request') return Promise.resolve({ action: 'decline' })
     return Promise.reject({ code: -32601, message: `method not found: ${method}` })
   }
 
   async open(dshSessionId, { cwd, mcp, resumeId, mode, instructions, model }) {
-    const peer = await this.ensure()
+    const peer = await this.ensure(mcp)
     const thread = this.threadFor(dshSessionId)
     if (resumeId !== undefined) thread.threadId = resumeId
     const config = {
@@ -109,7 +123,6 @@ export class CodexEngine {
       ...(instructions ? { developer_instructions: instructions } : {}),
       ...(mode ? { sandbox_mode: mode, approval_policy: mode === 'danger-full-access' ? 'never' : 'on-request' } : {}),
       ...(model && model !== 'default' ? { model } : {}),
-      ...(mcp !== undefined ? { mcp_servers: { dsbot: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } } } : {}),
     }
     if (thread.threadId !== undefined) {
       try {

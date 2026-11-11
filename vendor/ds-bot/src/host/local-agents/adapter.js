@@ -68,13 +68,17 @@ export class LocalAgentAdapter extends LlmAdapter {
   providerRetryPolicy() { return undefined }
   imageRequestPricing() { return undefined }
 
-  engine(route) {
-    let driver = this.engines.get(route)
+  // Fork: Codex's MCP config is process-level, so a Codex Bot gets its own
+  // app-server per Session (keyed by route + session). ACP and Claude keep one
+  // engine per route: theirs accept per-session MCP already.
+  engine(route, sessionId) {
+    const spec = engineOf(route, this.deps.customAgents())
+    if (spec === undefined) throw new LlmError(`Unknown local agent ${route}`, 'NO_ADAPTER')
+    const key = spec.kind === 'codex' && sessionId !== undefined ? `${route}\u0000${sessionId}` : route
+    let driver = this.engines.get(key)
     if (driver === undefined) {
-      const spec = engineOf(route, this.deps.customAgents())
-      if (spec === undefined) throw new LlmError(`Unknown local agent ${route}`, 'NO_ADAPTER')
       driver = this.deps.spawnEngine(spec.kind, route, spec)
-      this.engines.set(route, driver)
+      this.engines.set(key, driver)
     }
     return driver
   }
@@ -125,7 +129,7 @@ export class LocalAgentAdapter extends LlmAdapter {
     if (live !== undefined) await this.closeLive(live)
     const spec = engineOf(route, this.deps.customAgents())
     if (spec === undefined) throw new LlmError(`Unknown local agent ${route}`, 'NO_ADAPTER')
-    const engine = this.engine(route)
+    const engine = this.engine(route, sessionId)
     live = {
       sessionId, route, spec, engine, dead: false,
       record,
