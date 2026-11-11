@@ -65,4 +65,31 @@ node patches/dscord-memory-session.mjs --check   # 校验，缺任一改动则 e
 
 **重放时机**：dscord 升级 / 重装 / `pnpm install` 之后。`--check` 应该进安装后检查清单。
 
+---
+
+## dscord-codex-mcp.mjs
+
+**问题**：Codex 路由（`codex-cli/*`）的 Bot 拿不到**任何** DS Bot 工具——不只是记忆，连 `message_bot`、`dispatch_work` 都没有，所以它们永远无法主动找其他成员协作。
+
+**根因**：dscord 把工具服务器放在 `thread/start` 的 `mcp_servers` 参数里，而 Codex 0.163.0 只从**调用级配置**读 MCP 服务器，线程参数里的 `mcp_servers` 被静默忽略；Codex 也**不支持项目级配置**。于是那个 MCP 服务器从未被加载。
+
+**证据**：真莹的 Codex 线程 rollout 里 `"dsbot"` 出现 0 次，而 `mcp__codex_apps__*` 正常；`codex doctor` 只报告一份全局 `config.toml`；实测 `-c 'mcp_servers.x={url=...}'` 能注入成功。
+
+**修法**：Codex 的 app-server 接受 `-c key=value` 覆盖，而 ds-bot 每个 live session 起一个 app-server 子进程，所以在 spawn 时把该会话自己的 MCP url/token 作为 `-c` 传入。
+
+```js
+const processMcpArgs = mcp => (mcp?.url && mcp?.token
+  ? ['-c', `mcp_servers.dsbot={url="${mcp.url}", http_headers={Authorization="Bearer ${mcp.token}"}}`]
+  : []);
+```
+
+不动全局 `~/.codex/config.toml`；每个子进程只拿到自己 Bot 的工具服务。
+
+**应用 / 校验**：
+
+```bash
+node patches/dscord-codex-mcp.mjs           # 应用（幂等）
+node patches/dscord-codex-mcp.mjs --check   # 校验
+```
+
 **已知副作用**：每只 CLI 路由的 Bot 会多出一个 `memory:<botId>` 的 CLI 线程记录（存在 bot 状态的 `localAgents.sessions` 里），这是预期行为。
