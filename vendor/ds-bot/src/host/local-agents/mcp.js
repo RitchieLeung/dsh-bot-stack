@@ -36,8 +36,10 @@ export class LoopbackMcp {
     this.onCall = onCall
     this.calls = new Map()
     this.server = createServer((request, response) => void this.serve(request, response).catch(() => {
-      if (!response.headersSent) response.writeHead(500)
-      response.end()
+      try {
+        if (!response.headersSent) response.writeHead(500)
+        if (!response.writableEnded && !response.destroyed) response.end()
+      } catch {}
     }))
     this.url = undefined
   }
@@ -104,24 +106,35 @@ export class LoopbackMcp {
   serveCall({ id, params }, response) {
     const callId = `mcp-${randomUUID()}`
     const progressToken = params?._meta?.progressToken ?? callId
+    // The CLI may disappear mid-call (turn aborted, process gone). Writing to its
+    // ended SSE response raises ERR_STREAM_WRITE_AFTER_END as an async 'error'
+    // event, which a try/catch cannot stop and which would crash the whole host.
+    // Guard every write and absorb the stream's error.
+    response.on('error', () => {})
+    const alive = () => !response.writableEnded && !response.destroyed
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const send = (value) => { try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch {} }
+    const send = (value) => {
+      if (!alive()) return
+      try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch {}
+    }
+    const finish = () => { if (alive()) { try { response.end() } catch {} } }
     const entry = {
       progress: 0,
       settle: (result) => {
         clearInterval(timer)
         this.calls.delete(callId)
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: result.text }], isError: result.isError === true } })
-        response.end()
+        finish()
       },
       cancel: () => {
         clearInterval(timer)
         this.calls.delete(callId)
         send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'the call was cancelled' }], isError: true } })
-        response.end()
+        finish()
       },
     }
     const timer = setInterval(() => {
+      if (!alive()) { clearInterval(timer); return }
       entry.progress += 1
       send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken, progress: entry.progress * KEEPALIVE_MS, message: 'waiting for the tool result' } })
     }, KEEPALIVE_MS)
