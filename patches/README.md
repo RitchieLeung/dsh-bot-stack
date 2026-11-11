@@ -67,7 +67,11 @@ node patches/dscord-memory-session.mjs --check   # 校验，缺任一改动则 e
 
 ---
 
-## dscord-codex-mcp.mjs
+## dscord-codex-mcp.mjs — 未采用，已回退
+
+> 保留脚本作为记录与将来基础。**当前不要应用**：它注入的进程级 `-c` 会被**所有** `codex-cli` Bot 共享，这是错的。
+>
+> 原因：`vendor/ds-bot/src/host/local-agents/adapter.js` 的 `this.engines` 按 route 缓存，所有同 route 的 Bot 共用一个 `codex app-server` 进程；而 Codex 的 MCP 配置是进程级的。要每 Bot 一份，必须先让引擎按 Bot 分进程。
 
 **问题**：Codex 路由（`codex-cli/*`）的 Bot 拿不到**任何** DS Bot 工具——不只是记忆，连 `message_bot`、`dispatch_work` 都没有，所以它们永远无法主动找其他成员协作。
 

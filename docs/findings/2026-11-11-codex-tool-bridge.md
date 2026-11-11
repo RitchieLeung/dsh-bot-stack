@@ -1,7 +1,7 @@
 # 结论：Codex 路由的 Bot 拿不到任何 DS Bot 工具
 
 日期：2026-11-11
-状态：**已修复**（`patches/dscord-codex-mcp.mjs`），待重启验证
+状态：**未修复**。两次尝试均失败，根因是 dscord 的进程架构与 Codex 的进程级配置不兼容。
 
 ## 现象
 
@@ -37,7 +37,13 @@ dscord 假设 Codex app-server 接受**按线程**的 `mcp_servers` 配置。Cod
 
 结果：Codex 线程从创建起就没有 `dsbot` 这个 MCP 服务器，CLI 侧永远不会出现这些工具。
 
-## 修复：用 `-c` 调用级覆盖注入
+## 尝试一（失败）：用 `-c` 调用级覆盖注入
+
+思路本身成立（见下），但落地失败：`adapter.js` 的 `this.engines` 按 **route** 缓存，**所有 `codex-cli` 的 Bot 共用同一个 `codex app-server` 进程**，而 Codex 的 MCP 配置是**进程级**的——一个进程只能挂一份工具服务。要每只 Bot 各有一份，就得一个 Bot 一个进程，这与 dscord 的共享进程设计冲突。
+
+补丁已回退（`patches/backup/dscord-0.4.0-alpha.2-codex.js.orig`），`node patches/dscord-codex-mcp.mjs --check` 现在会报未打。
+
+### 思路记录：`-c` 调用级覆盖确实能注入
 
 一开始以为只能改全局 `config.toml`，但 `dsbot` 的端点是**动态的**（随机端口 + 每会话随机 token），写进静态全局配置不可行。后来找到 Codex 的第三条配置通道：
 
@@ -63,10 +69,16 @@ const processMcpArgs = mcp => (mcp?.url && mcp?.token
 
 同一份 rollout 里记录了 小欣、伟峰的对话：他们**成功用 `experience` 写入组内共享日记，并通过 `recall` 回读成功**。这两只是 API 路由（kimi / deepseek），工具走 DSH 原生通道，不经过 MCP。
 
+## 两条可行路径
+
+**A. 换 API 模型（推荐）**：把需要协作/写日记的 Bot 换成 deepseek / kimi。工具走 DSH 原生通道，不经过 MCP，一次配置全部恢复。零补丁。
+
+**B. 让 Codex 引擎按 Bot 分进程**：把 `adapter.js` 的 `this.engines` 缓存键从 `route` 改成 `route + sessionId`，每只 Bot 一个 `codex app-server` 子进程，再配合已验证可行的 `-c` 注入。代价：每个子进程约占 250 MB 内存；属于对 dscord 架构的改动，升级要重放；补丁数量再 +1。
+
 ## 现状
 
 | 需求 | 状态 |
 |---|---|
-| Codex Bot 拿到 remember/recall/contacts/message_bot/dispatch_work | 已打补丁，待重启验证 |
-| Codex Bot 写记忆 | 已修复（自动整理，走 API 模型） |
-| 需要重放补丁的时机 | dscord 升级或重装后，见 `patches/README.md` |
+| Codex Bot 写记忆 | ✅ 已修复（自动整理改走 API 模型，见 `patches/README.md`） |
+| Codex Bot 拿到工具 / 主动协作 | ❌ 未修复（需选 A 或 B） |
+| Codex Bot 被其他成员点名协作 | ✅ 本来就可以（消息只是聊天，不依赖工具） |
