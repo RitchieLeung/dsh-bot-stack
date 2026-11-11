@@ -140,6 +140,16 @@ window.__ModuleLoader__.load({ id: 'bot-knowledge', factory(require) {
 
 Stage 0 是**一次性验证**，不是交付物；通过后直接进 Stage 1。
 
+## 4.7 实测验证（2026-11-10 / 11）
+
+| 验证项 | 结果 |
+|---|---|
+| 定时投递的 prompt 能否让 Bot 写出日报 | ✅ 19:48 一次性任务触发，鲸鱼写出 `topic=2026-11-10` 的日报（四段齐全，带来源引用） |
+| 日报会不会作为聊天消息投送给用户 | ✅ 不会。用户未收到任何消息；日报只出现在面板的「日报」页 |
+| 投递回执 | ✅ `lastDelivery.deliveredAt = 19:48:00`，目标 session 与鲸鱼当前 session 一致 |
+| 同源路由 + Client 模块加载 | ✅ 面板可见，列出 5 只 Bot 与真实条目 |
+| 面板是否写库 | ✅ `lib/` 内无任何写 SQL；连接以 `readOnly: true` 打开，实测写入报 `attempt to write a readonly database` |
+
 ## 5. 风险与对策
 
 1. **日报投递到前台可能被 dscord 判为空回复失败**（前台一轮没有回复文字会记为失败）。
