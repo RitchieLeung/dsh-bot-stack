@@ -27,6 +27,14 @@ Antigravity 的 `mcpCapabilities` 是 null（不声明），但 `session/new` �
 
 副作用：真正不支持 MCP 的 ACP agent 会静默拿不到工具，但 Bot 仍能正常对话——这比直接拒绝开会话更可用。
 
+### 4. 审查模型判定改为通用 — `memory/native.mjs`
+
+原先用手写路由表判断"是不是本地 agent 路由"，新增 `agy-cli` 后漏掉了，导致 agy 的记忆审查仍走 agy 自己的模型 → `MEMORY_MODEL_EMPTY`。改成调用引擎注册表的 `isLocalAgentRoute()`，以后新增路由（含自定义 `acp-*`）自动覆盖。
+
+### 5. 空错误码容错 — `vendor/ds-bot/src/host/local-agents/adapter.js`
+
+ACP agent 可能回报空字符串错误码，`??` 会把空串保留下来，`LlmError` 于是拒绝："code must be a non-empty string"。改成空串当作没有 code。
+
 ## 不是改在这里的问题
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。

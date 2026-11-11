@@ -530,11 +530,14 @@ function renderReplay(messages, system) {
 function toLlmError(error, live) {
   if (error instanceof LlmError) return error
   const text = String(error?.message ?? error)
-  const code = error?.code === 'NO_ADAPTER' ? 'LOCAL_AGENT_MISSING'
+  // Fork: an agent may report an empty-string code; `??` would keep it and LlmError
+  // would reject it ("code must be a non-empty string").
+  const reported = typeof error?.code === 'string' && error.code !== '' ? error.code : undefined
+  const code = reported === 'NO_ADAPTER' ? 'LOCAL_AGENT_MISSING'
     : /not signed in|not logged in|login required|unauthorized|authentication/i.test(text) ? 'LOCAL_AGENT_SIGNIN'
       : /quota|rate.?limit|usage limit|exceeded/i.test(text) ? 'LOCAL_AGENT_QUOTA'
         : /exited|spawn|ENOENT/i.test(text) ? 'LOCAL_AGENT_EXIT'
-          : error?.code ?? 'LOCAL_AGENT_ERROR'
+          : reported ?? 'LOCAL_AGENT_ERROR'
   const hint = code === 'LOCAL_AGENT_SIGNIN' ? ` Sign in with: ${live?.spec?.signIn ?? `${live?.spec?.command ?? 'the CLI'} login`}.` : ''
   return new LlmError(`${text}${hint}`, code, error?.status === undefined ? {} : { status: error.status })
 }

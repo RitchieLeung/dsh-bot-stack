@@ -11,6 +11,7 @@ import { generateReviewWithBudget, prepareReviewBatch, prepareReviewProposal } f
 import { isModelQuotaFailure } from '../src/model-failure.mjs';
 import { memoryModelOptions } from './model-options.mjs';
 import { nativeMemoryInput, automaticReviewAllowed, isSourceMessage, heldIngressKey, prepareClaimedSources } from './ingress.mjs';
+import { isLocalAgentRoute } from '../vendor/ds-bot/src/host/local-agents/engines.js';
 
 const textOf = message => (message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
 // Used only for waits that do not touch the memory DB after resolving.
@@ -154,11 +155,12 @@ export function installNativeMemory(rt) {
   // Local-agent routes answer the review prompt in prose instead of the required JSON
   // proposal, so their Bots would never get a memory. The review is a mechanical
   // extraction job, so run it on a configured API model instead of the answering model.
-  const CLI_MODEL_ROUTES = ['codex-cli', 'claude-code', 'opencode', 'devin-cli', 'cursor-cli', 'gemini-cli', 'grok-cli', 'cline', 'qwen-code', 'goose', 'acp'];
   const reviewModelReference = async (bot, signal) => {
     const own = await modelReference(bot, signal);
     const slash = typeof own === 'string' ? own.indexOf('/') : -1;
-    if (slash <= 0 || !CLI_MODEL_ROUTES.includes(own.slice(0, slash))) return own;
+    // Fork: ask the engine registry instead of a hand-maintained list, so a newly
+    // added route (agy-cli, a custom acp-* agent, ...) is covered automatically.
+    if (slash <= 0 || !isLocalAgentRoute(own.slice(0, slash))) return own;
     return config.memoryReviewModel || process.env.DSCORD_MEMORY_REVIEW_MODEL || 'deepseek-official/deepseek-flash';
   };
 
