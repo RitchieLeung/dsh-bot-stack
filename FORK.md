@@ -31,6 +31,18 @@ Antigravity 的 `mcpCapabilities` 是 null（不声明），但 `session/new` �
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。
 
+## 改代码后怎么生效
+
+profile 用的是 `file:` 目录依赖，pnpm 装的是**快照不是软链**（试过软链：fork 目录没有 node_modules，`deep-view` 等依赖解析失败，整个 DSCord 插件加载不了）。所以：
+
+```bash
+cd dscord-fork
+./sync.sh          # 同步到 profile 的 node_modules/dscord
+# 然后重启 dsh web
+```
+
+`./sync.sh --check` 可以看到两边的差异。
+
 ## 升级上游
 
 1. 下载新 tgz，解包到临时目录
