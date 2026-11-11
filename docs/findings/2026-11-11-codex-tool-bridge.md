@@ -102,3 +102,19 @@ const processMcpArgs = mcp => (mcp?.url && mcp?.token
 
 - Codex Bot **不能主动发起**：只能在被叫到的那一轮里把 `@鲸鱼` 带出来。
 - 它**读不到群聊历史**（没有 `read_group_chat`），只能基于当前轮次上下文判断。
+
+## 实测终结：项目级 `.codex/config.toml` 不被读取
+
+有人（Gemini）主张 Codex 支持项目级 MCP 配置（`<项目>/.codex/config.toml`，与全局 deep merge）。在**这台机器的真实运行路径**上做了三次递进验证，结论是不支持：
+
+| 实验 | 条件 | 结果 |
+|---|---|---|
+| CLI 视角 | 含 `.codex/config.toml` 的 git 仓库内 `codex mcp list` | 看不到服务器（0），0.163.0 与 0.167.1 均如此 |
+| 带信任覆盖 | 追加 `-c 'projects.<path>.trust_level="trusted"'` | 仍为 0 |
+| **app-server 真实路径** | 探针 MCP 服务（独立会话，固定端口，转储所有请求）+ 写入真莹工作目录的 `.codex/config.toml` + 重启 dsh + 真莹实际跑一轮 | 探针日志**无 `initialize`**；线程 rollout 里也没有该 MCP 条目（仅有的 `probe` 命中是 Codex 插件描述里的英文单词） |
+
+辅助证据：`codex doctor` 在项目目录内也只报告 `~/.codex/config.toml` 一份；`codex features list` 175 个 flag 中没有项目级配置开关。
+
+测完已清理：探针进程停止，`zhenying/.codex/config.toml` 删除，`/tmp` 探针文件删除。探针脚本保留在 `probes/probe-mcp.mjs` 以便复现。
+
+**所以 Codex 的配置注入只有 `-c` 调用级覆盖一条路，而它是进程级的——被 dscord"同 route 共享一个 Codex 进程"的设计挡住。**
