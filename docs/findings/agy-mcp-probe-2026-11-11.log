@@ -1,0 +1,8 @@
+2026-11-11T04:59:11.068Z listening on http://127.0.0.1:39123/mcp
+2026-11-11T04:59:18.749Z unhandled server/discover
+2026-11-11T04:59:18.751Z initialize client={"name":"antigravity-client","version":"v1.0.0"}
+2026-11-11T04:59:18.752Z unhandled notifications/initialized
+2026-11-11T04:59:18.754Z tools/list
+2026-11-11T04:59:18.856Z unhandled notifications/roots/list_changed
+2026-11-11T04:59:18.906Z unhandled notifications/roots/list_changed
+2026-11-11T04:59:35.955Z tools/call name=probe_hello

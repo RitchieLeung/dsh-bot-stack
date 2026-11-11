@@ -118,3 +118,54 @@ const processMcpArgs = mcp => (mcp?.url && mcp?.token
 测完已清理：探针进程停止，`zhenying/.codex/config.toml` 删除，`/tmp` 探针文件删除。探针脚本保留在 `probes/probe-mcp.mjs` 以便复现。
 
 **所以 Codex 的配置注入只有 `-c` 调用级覆盖一条路，而它是进程级的——被 dscord"同 route 共享一个 Codex 进程"的设计挡住。**
+
+## 决定性复测（2026-11-11 13:10，推翻两处旧结论）
+
+用两个独立探针（`probes/probe-codex-c-inject.mjs`、`probes/probe-codex-bearer.mjs`）在真实 `codex app-server --listen stdio://` 上验证，结论如下：
+
+### 1. `-c` 注入在运行时生效（不再只是 `mcp list` 能解析）
+
+探针服务器（记录所有请求）收到：
+
+```
+initialize client={"name":"codex-mcp-client","title":"Codex","version":"0.163.0"}
+tools/list
+```
+
+这是 `codex app-server` 子进程在 `spawn` 时带上 `-c 'mcp_servers.probe={url="http://127.0.0.1:PORT/mcp"}'` 后，**真的把该 MCP 服务器挂进了线程并查询了工具清单**。与 `thread/start` 里塞 `mcp_servers`（被静默忽略、rollout 里 0 次 "dsbot"）形成鲜明对比。
+
+### 2. bearer 鉴权可行（`badAuth=false`）
+
+带 `Authorization: Bearer <token>` 校验的探针服务器，用官方字段注入：
+
+```
+-c 'mcp_servers.probe={url="...", bearer_token_env_var="PROBE_TOKEN"}'
+env PROBE_TOKEN=<token>
+```
+
+收到 `tools/list (authorized)`，`badAuth=false`。所以 dscord 的 per-session 随机 token 可以通过 `bearer_token_env_var` 传进去，不必动全局 `config.toml`。
+
+### 3. 内存代价被高估了约 5 倍
+
+| 进程 | RSS |
+|---|---|
+| dscord 实际跑着的 codex app-server（0.163.0，空闲） | 22–50 MB（随 GC 波动） |
+| ChatGPT.app 的托管 app-server daemon（0.167.1，7 小时持续使用） | ~60 MB |
+| `codex resume` 交互进程 | 22–33 MB |
+
+"每进程约 250 MB" 是错误估计。真实量级是 **空闲 20–50 MB、活跃约 60 MB**。真莹 + 鹤鸣两只 Bot 分进程，合计约 60–120 MB，在这台机器上可忽略。
+
+### 4. 版本已变，机制稳定
+
+`~/.local/bin/codex` 是指向 `~/.codex/packages/standalone/current/bin/codex` 的软链，ChatGPT.app 在 13:08 自动把它从 0.163.0 升到 0.167.1。两次探针分别在 0.163.0 / 0.167.1 上通过，`-c` + `bearer_token_env_var` 机制两版都成立。
+
+## 修订后结论
+
+路径 B（按 Bot 分进程 + `-c` 注入）**不是"250 MB/进程的昂贵改动"，而是"~30–60 MB/进程的轻量改动"**，且机制已被端到端证实。它与 `claude.js` 已经采用的"每会话一个进程"是同一套模式，只是 Codex 引擎目前按 route 共享进程才挡在这。
+
+修订后的两条路径成本对比：
+
+| 路径 | 改动量 | 内存代价 | 保留 codex 模型 |
+|---|---|---|---|
+| A. 换 API/agy 路由 | 零补丁 | 零 | 否（换模型/身份） |
+| B. Codex 按会话分进程 + `-c` 注入 | 改 `adapter.js` 缓存键 + `codex.js` spawn 参数（局部、镜像 claude.js） | ~30–60 MB/Bot | 是 |
