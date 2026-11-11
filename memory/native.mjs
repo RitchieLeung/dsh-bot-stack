@@ -91,6 +91,23 @@ export function installNativeMemory(rt) {
   };
   const stringify = value => JSON.stringify(value);
   const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] };
+  // Fork: register the team roster as contacts so `contacts` resolves a Bot's name
+  // to its stable id. Bot messages never reach `sources` with a Bot author, so the
+  // table would otherwise only learn human/tool accounts and a Bot lookup falls
+  // back to {id:<name>, kind:'unknown'}. Idempotent: an unchanged record is skipped.
+  const ensureRosterContacts = async () => {
+    try {
+      await rt.load();
+      for (const bot of Object.values(rt.state.bots ?? {})) {
+        if (typeof bot?.id !== 'string' || bot.id === '') continue;
+        const name = bot.name || bot.id, existing = store.getContact(bot.id);
+        if (existing && existing.name === name && existing.kind === 'bot') continue;
+        store.contact({ id: bot.id, name, kind: 'bot', botId: bot.id, source: { transport: 'native', eventId: 'roster' }, observedAt: store.clock() });
+      }
+    } catch (error) {
+      rt.warn?.('ds-bot: registering roster contacts failed: %s', error?.message ?? error);
+    }
+  };
   const string = description => ({ type: 'string', description });
   const params = {
     text: { ...string('One self-contained durable fact in the speaker’s language'), required: true },
@@ -123,7 +140,7 @@ export function installNativeMemory(rt) {
   rt.teamTools.push(defineTool({ name: 'contacts', description: 'Find stable people/Bot/group identities and names known through this Bot’s observations or source-backed memories. Equal names stay separate accounts.',
     parameters: { query: string('Full account ID or display-name fragment; omit to list'),
       history: { type: 'boolean', description: 'Include retained observations visible to this Bot; default returns known aliases and latest visible observation only' } }, output,
-    async execute(args, exec) { return stringify(memory.contacts(caller(exec), { query: args.query, history: args.history === true })); } }));
+    async execute(args, exec) { await ensureRosterContacts(); return stringify(memory.contacts(caller(exec), { query: args.query, history: args.history === true })); } }));
   rt.teamTools.push(defineTool({ name: 'memory_source', description: 'Read exact original evidence by source ID and optional revision. Historical evidence is labelled; this does not mark it current.',
     parameters: { id: { ...string('Exact source ID from a memory/view'), required: true }, revision: { type: 'number' } }, output,
     async execute(args, exec) { const id = caller(exec); return stringify(memory.readSource(id, args, memory.current(id, exec.agent?.id) || null)); } }));
