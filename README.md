@@ -65,18 +65,21 @@ plugin_manager install_bundle → target: file:/Users/ritchie_leung/.dsh/bot/wor
 
 装完刷新页面；Host 半会随 profile 加载，Client 半需要刷新一次浏览器。
 
-## 依赖的第三方补丁
+## 依赖的 dscord fork
 
-本插件本身不改 dscord，但**面板显示的记忆能否产出**依赖 dscord 的一个缺陷修复：
+**从 2026-11-11 起，这个 profile 用的 dscord 是自建 fork，不再是官方 tgz。**
 
-> codex-cli / claude-code / ACP 路由的 Bot 因为记忆审查复用了自己的聊天会话，永远拿不到"只输出 JSON"的指令，导致记忆完全不产出。
+- 位置：`dscord-fork/`（独立 git 仓库，源自 `dscord-0.4.0-alpha.2.tgz`，Apache-2.0）
+- profile 依赖：`"dscord": "file:.../bot-knowledge/dscord-fork"`，`node_modules/dscord` 是指向它的软链
+- 改动清单与上游升级流程：见 [`dscord-fork/FORK.md`](dscord-fork/FORK.md)
 
-修法与应用方式见 [patches/README.md](patches/README.md)。dscord 升级或重装后必须重放：
+fork 里带了：
 
-```bash
-node patches/dscord-memory-session.mjs --check   # 未打则 exit 1
-node patches/dscord-memory-session.mjs           # 重新应用
-```
+1. **记忆审查修复** —— CLI agent 路由的 Bot 之前写不了记忆（独立会话 + 审查改用 API 模型）
+2. **Antigravity（`agy`）引擎** —— 作为一等 ACP 路由 `agy-cli`
+3. **ACP 能力门槛放宽** —— 只在 agent 明确声明不支持 HTTP MCP 时才拒绝
+
+`patches/` 下的运行时补丁脚本是 fork 之前的历史手段，现已退休，仅作记录与对照。
 
 ## 开发
 
