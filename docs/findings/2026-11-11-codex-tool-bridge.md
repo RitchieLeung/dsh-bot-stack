@@ -169,3 +169,24 @@ env PROBE_TOKEN=<token>
 |---|---|---|---|
 | A. 换 API/agy 路由 | 零补丁 | 零 | 否（换模型/身份） |
 | B. Codex 按会话分进程 + `-c` 注入 | 改 `adapter.js` 缓存键 + `codex.js` spawn 参数（局部、镜像 claude.js） | ~30–60 MB/Bot | 是 |
+
+## 已实施修复（2026-11-11 13:52，路径 B）
+
+按「每会话一个 codex app-server + spawn 时 `-c` 注入」落地，三处改动：
+
+1. **`adapter.js`**：`engine(route, sessionId)` 的缓存键对 codex 改成 `route + \0 + sessionId`（`liveFor` 传入 `sessionId`）；ACP/Claude 仍按 route 一个引擎。
+2. **`codex.js`**：`ensure(mcp)` 在 spawn 时追加
+   `-c 'mcp_servers.dsbot={url="<loopback>", bearer_token_env_var="DSBOT_MCP_TOKEN"}'`，
+   token 经 `DSBOT_MCP_TOKEN` 环境变量传入；`open()` 改为 `ensure(mcp)`；删除 `thread/start` 里被 Codex 忽略的 `mcp_servers` 死配置。
+3. **`codex.js`**：`onRequest` 处理 `mcpServer/elicitation/request`（返回 `decline`），避免 Codex 的 MCP elicitation 请求被 -32601 拒绝刷错误。
+
+**验证**（`probes/probe-codex-engine.mjs`，用真实 `CodexEngine` + 带鉴权的探针 MCP）：
+
+```
+initialize client={"name":"codex-mcp-client","version":"0.167.1"}
+tools/list           ← codex 连上并拉取工具，badAuth=false
+```
+
+即桥通了、token 鉴权正确。`tools/call` 在裸 app-server 探针里没触发（裸环境的模型未完整加载），真正端到端要靠重启后真莹/鹤鸣跑一轮确认。
+
+**遗留成本**：codex 每会话一个进程（实测空闲 ~30–60 MB）；另有 1 个 route 级探针进程用于 `model/list`。
