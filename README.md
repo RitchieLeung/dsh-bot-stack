@@ -65,6 +65,19 @@ plugin_manager install_bundle → target: file:/Users/ritchie_leung/.dsh/bot/wor
 
 装完刷新页面；Host 半会随 profile 加载，Client 半需要刷新一次浏览器。
 
+## 依赖的第三方补丁
+
+本插件本身不改 dscord，但**面板显示的记忆能否产出**依赖 dscord 的一个缺陷修复：
+
+> codex-cli / claude-code / ACP 路由的 Bot 因为记忆审查复用了自己的聊天会话，永远拿不到"只输出 JSON"的指令，导致记忆完全不产出。
+
+修法与应用方式见 [patches/README.md](patches/README.md)。dscord 升级或重装后必须重放：
+
+```bash
+node patches/dscord-memory-session.mjs --check   # 未打则 exit 1
+node patches/dscord-memory-session.mjs           # 重新应用
+```
+
 ## 开发
 
 ```bash
