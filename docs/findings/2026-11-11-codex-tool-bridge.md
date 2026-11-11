@@ -178,15 +178,16 @@ env PROBE_TOKEN=<token>
 2. **`codex.js`**：`ensure(mcp)` 在 spawn 时追加
    `-c 'mcp_servers.dsbot={url="<loopback>", bearer_token_env_var="DSBOT_MCP_TOKEN"}'`，
    token 经 `DSBOT_MCP_TOKEN` 环境变量传入；`open()` 改为 `ensure(mcp)`；删除 `thread/start` 里被 Codex 忽略的 `mcp_servers` 死配置。
-3. **`codex.js`**：`onRequest` 处理 `mcpServer/elicitation/request`（返回 `decline`），避免 Codex 的 MCP elicitation 请求被 -32601 拒绝刷错误。
+3. **`codex.js`**：`onRequest` 处理 `mcpServer/elicitation/request` —— **这是解掉 "user rejected MCP tool call" 的关键**。Codex 的 MCP 工具调用要过 tool-call elicitation 审批；返回 `decline` 会让每次调用都报 "user rejected MCP tool call"（真莹 14:09 就是这条）。正确做法：`serverName === 'dsbot'` 时返回 `{action:'accept', content:{}}`（自家 loopback，DSH 仍管工具守卫），其他 MCP 服务器返回 `decline`。
 
 **验证**（`probes/probe-codex-engine.mjs`，用真实 `CodexEngine` + 带鉴权的探针 MCP）：
 
 ```
 initialize client={"name":"codex-mcp-client","version":"0.167.1"}
-tools/list           ← codex 连上并拉取工具，badAuth=false
+tools/list
+tools/call name=remember   ← elicitation 返回 accept 后，模型真的调用了工具
 ```
 
-即桥通了、token 鉴权正确。`tools/call` 在裸 app-server 探针里没触发（裸环境的模型未完整加载），真正端到端要靠重启后真莹/鹤鸣跑一轮确认。
+即桥通、token 鉴权正确、工具调用成功（`listed=true called=true badAuth=false`）。
 
 **遗留成本**：codex 每会话一个进程（实测空闲 ~30–60 MB）；另有 1 个 route 级探针进程用于 `model/list`。
