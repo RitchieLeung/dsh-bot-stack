@@ -107,10 +107,14 @@ export class CodexEngine {
         })
       })
     }
-    // Fork: Codex asks the client to elicit user input for an MCP server (MCP
-    // `elicitation/create`). An unattended Bot has no one to ask, so decline; the
-    // request is otherwise rejected with -32601 and the turn logs a client error.
-    if (method === 'mcpServer/elicitation/request') return Promise.resolve({ action: 'decline' })
+    // Fork: Codex gates MCP tool calls through `mcpServer/elicitation/request`
+    // (tool-call elicitation). Rejecting it here makes every call fail with
+    // "user rejected MCP tool call". The dsbot server is dscord's own loopback
+    // (DSH still enforces its tool guards), so accept it; any other server needs a
+    // human answer the Bot cannot give, so decline.
+    if (method === 'mcpServer/elicitation/request') {
+      return Promise.resolve(params?.serverName === 'dsbot' ? { action: 'accept', content: {} } : { action: 'decline' })
+    }
     return Promise.reject({ code: -32601, message: `method not found: ${method}` })
   }
 
