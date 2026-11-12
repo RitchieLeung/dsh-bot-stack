@@ -141,6 +141,11 @@ export class WorkCore {
     if (!id) return;
     this.botName = (await this.native.bot(this.node.nativeBotId).catch(() => null))?.name || this.botName;
     this.frontSessions.add(id);
+    // The front reaches only FRONT_TOOLS (the guard below refuses everything else),
+    // none of which run a shell or touch arbitrary files. Leaving the default `ask`
+    // policy only strands the Bot on an approval card the user cannot answer from
+    // another session view, so the front is trusted the same way workers are.
+    this.ctx.get?.('approval')?.setPolicy(agent, 'never');
     const tools = agent.ctx?.tools;
     if (!tools || this.served.has(agent)) return;
     this.served.add(agent);
