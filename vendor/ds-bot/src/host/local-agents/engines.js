@@ -12,8 +12,6 @@ export const ENGINES = {
   'opencode': { name: 'OpenCode', kind: 'acp', command: 'opencode', args: ['acp'], version: ['--version'] },
   'cursor-cli': { name: 'Cursor CLI', kind: 'acp', command: 'cursor-agent', args: ['acp'], version: ['--version'] },
   'gemini-cli': { name: 'Gemini CLI', kind: 'acp', command: 'gemini', args: ['--acp'], version: ['--version'] },
-  // Fork: Google Antigravity CLI speaks ACP via `agy acp`.
-  'agy-cli': { name: 'Antigravity', kind: 'acp', command: 'agy', args: ['acp'], version: ['--version'] },
   'grok-cli': { name: 'Grok CLI', kind: 'acp', command: 'grok', args: ['agent', 'stdio'], version: ['--version'] },
   'cline': { name: 'Cline', kind: 'acp', command: 'cline', args: ['--acp'], version: ['--version'], env: { CLINE_SESSION_BACKEND_MODE: 'local' } },
   'qwen-code': { name: 'Qwen Code', kind: 'acp', command: 'qwen', args: ['--acp'], version: ['--version'] },
