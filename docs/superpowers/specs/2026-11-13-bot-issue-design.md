@@ -32,28 +32,22 @@
 - 面板沿用 `dsh-plugin-bot-knowledge` 的形态（Host + Client 两个 half）。
 - issue 数据存各自机器的 dsh。
 
-## 方案（已选：基于 dsh-orchestrator 改造）
+## 方案（已选：自研独立插件 `dsh-plugin-bot-issue`）
 
-调研发现 [dsh-orchestrator](https://github.com/EricJiang0423/dsh-orchestrator)（Apache-2.0，
-TypeScript，6049 行，自带 100 个通过测试）已实现 issue board 绝大部分能力：
+先 fork `dsh-orchestrator` 试过（保留 domain/service/rpc/tools/client，重写 session-link），
+但它的 host half 与 dsh 0.2.2-rc.1 代码层面不兼容，装进 profile 后整个 dsh web 起不来，
+遂放弃 fork，改为**自研一个独立插件**。
 
-- 状态机 + Zod schema（`domain.ts` 303 行）
-- 数据层 `ctx.taskboard`（`service.ts` 824 行：项目/issue/评论/活动/消息）
-- 模型工具 `taskboard_*`（`tools.ts` 406 行）+ 审批闸门（agent 不能自批准/自 done/自归档）
-- RPC + SSE（`rpc.ts`/`wire.ts` 498 行）
-- 面板 UI（`client/` 2067 行）
-- `/task` 命令 + `manage-taskboard` skill
-
-**决策：fork 它**，保留 domain/service/rpc/tools/client（约 4000 行复用），
-重写 `session-link.ts`（约 960 行），裁掉 `plan-loop.ts`，轻改 command/skill。改造幅度约 20–25%。
-
-以下是被替换的原方案记录：
+结论：新插件 `dsh-plugin-bot-issue` 与知识库 `dsh-plugin-bot-knowledge` 平级（同一 profile
+两条 plugin row，互不嵌套）。事务不在知识库里面——知识库只读展示记忆，事务有自己可写的
+SQLite、自己的路由、自己的模型工具和自己的面板。
 
 | 方案 | 描述 | 结论 |
 |---|---|---|
 | A. 复用 dscord 任务台账 | issue = `dispatch_work` 的任务 + 列表面板 | 最快，但无历史/状态/评论 |
-| B. 新做「事务」插件 | 独立插件从零实现 | 已被 fork 方案取代（省一半工作量） |
+| B. 新做「事务」插件 | 独立插件从零实现 | **已选** |
 | C. 扩展知识库插件 | 在 `dsh-plugin-bot-knowledge` 里加 tab | 知识库只读展示，耦合浑浊 |
+| D. fork dsh-orchestrator | 保留 4000 行，重写 session-link | 已试，host half 与 0.2.2-rc.1 不兼容，放弃 |
 
 ## 设计
 
@@ -61,23 +55,26 @@ TypeScript，6049 行，自带 100 个通过测试）已实现 issue board 绝�
 
 `~/.dsh/bot/issue/issue.sqlite`：
 
-- `issues`：`id, title, body, status, mainBotId, parentId, plain, createdAt, updatedAt, closedAt, result`
-- `comments`：`id, issueId, author, body, at`（评论同时充当时间线）
-- `dispatches`：`issueId, taskId, workerSessionId, at`（把 dscord 的 task 回链到 issue）
+- `issues`：`id, title, body, status, parentId, createdBy, createdByName, version, createdAt, updatedAt, closedAt, result`
+  （主 Bot 按机器取、不存每行——每台机器单主 Bot，写回时从 state.json 解析）
+- `comments`：`id, issueId, authorKind, authorName, body, kind, at`（评论同时充当时间线；
+  `kind` 区分 comment/status/result）
+- `dispatches`：`id, issueId, taskId, workerSessionId, status, at`（把 dscord 的 task 回链到 issue）
 
-状态机：`open → discussing → dispatched → in_progress → done | failed | cancelled`
+状态机：`open → discussing → dispatched → in_review → done | failed | cancelled`
+（已派工 dispatched 由工作者独占，不能重复派工；done/failed/cancelled 可重开回 open）
 
 ### 2. 主 bot 的工具（Host 插件注册的 dsh 工具）
 
-- `issue_create(title, body, parentId?, plain?)` → 新 issue
+- `issue_create(title, body, parentId?)` → 新 issue
 - `issue_list(status?, parentId?)` → issue 列表
-- `issue_get(id)` → issue + 评论 + 派工记录
-- `issue_update(id, status?, result?)` → 更新状态/结果
+- `issue_get(id)` → issue + 评论 + 派工记录（返回 version 供安全写入）
+- `issue_update(id, status?, result?, expectedVersion?)` → 更新状态/结果（version 守卫）
 - `issue_comment(id, body)` → 追加评论
-- `issue_dispatch(id, taskId, workerSessionId)` → 登记派工（提供 issue↔task 的 join key）
 
-**注意**：这些工具必须在 dscord-fork 的 `FRONT_TOOLS` 里放行，否则主 bot 调用会被
-guard 拒绝。改法：把名单做成**可配置的 extra front tools**，避免以后每加一个插件都改 fork。
+派工登记**不是**一个模型工具：派工由面板「启动」动作触发，主 Bot 调 dscord 的
+`dispatch_work`，写回轮询把 task 回链到 issue（见第 4 节）。工具用 `defineTool` 注册，
+与 dscord 的 front tools 平级。
 
 ### 3. 面板（Client 插件）
 
