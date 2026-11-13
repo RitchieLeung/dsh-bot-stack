@@ -32,12 +32,27 @@
 - 面板沿用 `dsh-plugin-bot-knowledge` 的形态（Host + Client 两个 half）。
 - issue 数据存各自机器的 dsh。
 
-## 方案（已选 B）
+## 方案（已选：基于 dsh-orchestrator 改造）
+
+调研发现 [dsh-orchestrator](https://github.com/EricJiang0423/dsh-orchestrator)（Apache-2.0，
+TypeScript，6049 行，自带 100 个通过测试）已实现 issue board 绝大部分能力：
+
+- 状态机 + Zod schema（`domain.ts` 303 行）
+- 数据层 `ctx.taskboard`（`service.ts` 824 行：项目/issue/评论/活动/消息）
+- 模型工具 `taskboard_*`（`tools.ts` 406 行）+ 审批闸门（agent 不能自批准/自 done/自归档）
+- RPC + SSE（`rpc.ts`/`wire.ts` 498 行）
+- 面板 UI（`client/` 2067 行）
+- `/task` 命令 + `manage-taskboard` skill
+
+**决策：fork 它**，保留 domain/service/rpc/tools/client（约 4000 行复用），
+重写 `session-link.ts`（约 960 行），裁掉 `plan-loop.ts`，轻改 command/skill。改造幅度约 20–25%。
+
+以下是被替换的原方案记录：
 
 | 方案 | 描述 | 结论 |
 |---|---|---|
-| A. 复用 dscord 任务台账 | issue = `dispatch_work` 的任务 + 列表面板 | 最快，但任务台账是临时的、无历史/状态/评论 |
-| **B. 新做「事务」插件** | 独立插件：issue 存储 + 面板 + 主 bot 的工具；派工复用 dscord | **已选** |
+| A. 复用 dscord 任务台账 | issue = `dispatch_work` 的任务 + 列表面板 | 最快，但无历史/状态/评论 |
+| B. 新做「事务」插件 | 独立插件从零实现 | 已被 fork 方案取代（省一半工作量） |
 | C. 扩展知识库插件 | 在 `dsh-plugin-bot-knowledge` 里加 tab | 知识库只读展示，耦合浑浊 |
 
 ## 设计
