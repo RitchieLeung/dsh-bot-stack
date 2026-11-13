@@ -170,6 +170,7 @@ export class WorkCore {
           deliverables: { type: 'string', description: '要交付的文件或结果，例如“一个 CSV 文件”' },
           audience: { type: 'string', required: true, description: '结果交给谁、按什么口径，例如“玩家小满：通俗说明，不贴堆栈、日志和源码位置”或“开发：要完整调用链”' },
           plain: { type: 'boolean', description: '对方不该看到技术内部信息时为 true：核心会拒绝带堆栈、异常类型、源码位置或日志原文的 reply 和交付文本文件，让工作者改写' },
+          issueId: { type: 'string', description: '事务（issue）派工时填 issue 的 id：结果不再回某个房间消息，而是由事务模块把结果写回该 issue。只在接到“为事务派工”的指令时填，平时不要填。' },
         },
         execute: args => this.dispatch(args) },
       { name: 'task_join', output,
@@ -211,12 +212,17 @@ export class WorkCore {
     ];
   }
 
-  async dispatch({ title, brief, deliverables, audience, plain }) {
+  async dispatch({ title, brief, deliverables, audience, plain, issueId }) {
     title = String(title || '').trim().slice(0, 120);
     brief = String(brief || '').trim();
     if (!title || !brief) return '需要 title 和 brief。';
     const id = shortId();
-    const origin = this.origin || this.askedOrigin();
+    issueId = String(issueId || '').trim();
+    // 事务（issue）派工：没有要回复的房间消息，origin 由 issue 提供；worker 结果
+    // 由事务模块的写回轮询从 native-bridge.json 读走并回写 issue，不回任何房间。
+    const origin = issueId
+      ? { issueId, senderId: 'issue', senderName: 'issue', body: brief, roomId: null, via: null, files: [] }
+      : (this.origin || this.askedOrigin());
     // Work needs a message to answer. A turn the native host resumed on its own after a
     // restart has none, and must not quietly redo work the restart left unknown.
     if (!origin) return '现在没有要回复的消息，不能派工。宿主重启后结果不确定的任务不会自动重做；对方要重做时会再发消息。';
