@@ -161,7 +161,17 @@ export class NativeBridge {
   async event(session, event) {
     if (await this.core.event(session, event)) return;
     const run = this.run;
-    if (!run) return;
+    if (!run) {
+      // A turn with no room request in flight (for example the issue board's
+      // `start` prompting the front directly to dispatch): still make sure the
+      // front session carries its front tools, or `dispatch_work` is missing
+      // and the Bot falls back to a different worker mechanism.
+      const bot = await this.native.bot(this.node.nativeBotId).catch(() => null);
+      if (bot && session.id === bot.sessionId) {
+        this.native.agent(session.id).then(agent => this.core.serveFront(agent)).catch(() => {});
+      }
+      return;
+    }
     const message = event.data?.message || event.data;
     const source = message?.source;
     // Native Bot-to-Bot replies carry the exchange they answer. Record it where
