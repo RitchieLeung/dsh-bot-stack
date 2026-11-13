@@ -1,0 +1,21 @@
+{
+  "name": "dsh-plugin-bot-issue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "事务（issue）管理模块：每件事从一个 issue 出发，主 Bot 接活并派工，工作者闭环后把结果同步回 issue。",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

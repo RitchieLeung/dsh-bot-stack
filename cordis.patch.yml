@@ -1,0 +1,9 @@
+# Bundle patch for dsh-plugin-bot-issue.
+#
+# 事务模块与知识库（dsh-plugin-bot-knowledge）平级：同一个 profile 里各自一条
+# plugin row，互不嵌套。派工复用 dscord 的 dispatch_work，issue 数据存本机
+# ~/.dsh/bot/issue/issue.sqlite。
+
+- insert:
+    - id: bot-issue
+      name: 'dsh-plugin-bot-issue'
