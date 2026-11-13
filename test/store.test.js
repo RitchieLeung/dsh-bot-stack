@@ -58,43 +58,54 @@ test('version guard refuses stale writes', () => {
   store.close();
 });
 
-test('recordDispatch blocks double dispatch of a WIP issue', () => {
+test('syncTask records a live task and marks the issue dispatched', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  const d = store.recordDispatch(issue.id, { taskId: 'T-abc', workerSessionId: 's1' });
-  assert.equal(d.taskId, 'T-abc');
-  assert.equal(store.get(issue.id).status, 'dispatched');
-  assert.throws(() => store.recordDispatch(issue.id, { taskId: 'T-def' }), /不能重复派工/);
+  store.syncTask(issue.id, { taskId: 'T-abc', workerSessionId: 's1', status: 'running' });
+  const full = store.get(issue.id);
+  assert.equal(full.status, 'dispatched');
+  assert.equal(full.dispatches.length, 1);
+  assert.equal(full.dispatches[0].taskId, 'T-abc');
+  assert.ok(store.activeDispatch(issue.id));
   store.close();
 });
 
-test('settleDispatch done sends issue to in_review with a result comment', () => {
+test('syncTask done sends issue to in_review with a result comment', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.recordDispatch(issue.id, { taskId: 'T-abc' });
-  const full = store.settleDispatch(issue.id, { taskId: 'T-abc', status: 'done', resultText: '已上线，共 12 台机器。' });
+  store.syncTask(issue.id, { taskId: 'T-abc', status: 'running' });
+  const full = store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '已上线，共 12 台机器。' });
   assert.equal(full.status, 'in_review');
   assert.ok(full.comments.some(c => c.kind === 'result' && /12 台/.test(c.body)));
   assert.equal(full.dispatches[0].status, 'done');
+  assert.equal(store.activeDispatch(issue.id), null);
   store.close();
 });
 
-test('settleDispatch is idempotent', () => {
+test('syncTask is idempotent', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.recordDispatch(issue.id, { taskId: 'T-abc' });
-  store.settleDispatch(issue.id, { taskId: 'T-abc', status: 'done', resultText: '结果' });
-  const again = store.settleDispatch(issue.id, { taskId: 'T-abc', status: 'done', resultText: '重复' });
+  store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '结果' });
+  const again = store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '重复' });
   assert.equal(again.comments.filter(c => c.kind === 'result').length, 1);
   store.close();
 });
 
-test('settleDispatch failed sends issue to failed', () => {
+test('syncTask failed sends issue to failed', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.recordDispatch(issue.id, { taskId: 'T-abc' });
-  const full = store.settleDispatch(issue.id, { taskId: 'T-abc', status: 'failed', resultText: '做不了' });
-  assert.equal(full.status, 'failed');
+  store.syncTask(issue.id, { taskId: 'T-abc', status: 'failed', resultText: '做不了' });
+  assert.equal(store.get(issue.id).status, 'failed');
+  store.close();
+});
+
+test('syncTask leaves a human-closed issue alone', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.update(issue.id, { status: 'cancelled' });
+  const full = store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '迟到的结果' });
+  assert.equal(full.status, 'cancelled'); // 不覆盖人工关闭
+  assert.ok(full.comments.some(c => c.kind === 'result' && /迟到的结果/.test(c.body)));
   store.close();
 });
 
