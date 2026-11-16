@@ -9,10 +9,18 @@ Bot 的记忆；这个插件拥有自己的可写数据库、自己的 HTTP 路�
 ## 能力
 
 - **issue 一等对象**：标题、正文、状态、经办人（主 Bot）、父 issue、时间线、评论、结果。
-- **主 Bot 工具** `issue_create / issue_list / issue_get / issue_update / issue_comment`。
+- **主 Bot 工具** `issue_create / issue_list / issue_get / issue_update / issue_link / issue_unlink / issue_comment`。
 - **「事务」面板**：列表（按状态筛选）、新建、详情（时间线 + 评论 + 派工记录）、状态流转。
 - **状态机**：`open → discussing → dispatched → in_review → done | failed | cancelled`。
   已派工（dispatched）的 issue 由工作者独占，不能重复派工。
+- **标签（tag）**：像 Notion 的多选标签。标签有独立的库（`tags` 表），库里没有的
+  输入回车即新建；悬停标签右边的 `×` 从库里删除（同时把它从所有事务上摘掉）。
+  一个事务可挂多个标签，`issues.type` 退化成一号标签的镜像，只为兼容旧调用方。
+- **依赖（depends on）**：`A 依赖 B` 记成一条 `issue_links(A → B)` 边，表示
+  **B 闭环了 A 才能闭环**。详情页两栏都能加/删：前置（A 依赖谁）和后置（谁等 A）。
+  前置没闭环时 `done` 会被服务端拒绝（`BLOCKED_BY_DEPS`），**不拦启动和派活**；
+  前置被取消/失败也算没完成（否则取消就成了绕过依赖的后门）；禁止自依赖和成环；
+  已闭环的事务不能再挂没完成的前置。
 
 ## 派工闭环（Phase 2，见计划文档）
 
@@ -22,7 +30,8 @@ issue（done → `in_review`，failed → `failed`），闭环者写回。
 
 ## 数据
 
-- issue 库：`~/.dsh/bot/issue/issue.sqlite`（`issues` / `comments` / `dispatches` 三表）
+- issue 库：`~/.dsh/bot/issue/issue.sqlite`（`issues` / `comments` / `dispatches` / `tags` /
+  `issue_tags` / `issue_links`）
 - 主 Bot 身份：读 dscord 的 `~/.dsh/bot/state.json`（`mainBotIds`），不写死名字
   （Mac 鲸鱼 / 146 小欣）。
 

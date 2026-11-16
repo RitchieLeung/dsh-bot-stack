@@ -265,3 +265,151 @@ test('an old board backfills #numbers in creation order', () => {
   assert.equal(byId['I-old2'], 2);
   store.close();
 });
+
+// ---- 标签（tag）：多选、可新建、可删除 ----
+
+test('tags: create stores several labels and the library knows them', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X', tags: ['bug', 'P0'] });
+  assert.deepEqual(issue.tags, ['bug', 'P0']);
+  assert.equal(issue.type, 'bug'); // legacy mirror = first label
+  assert.deepEqual(store.tags(), ['bug', 'P0']);
+  store.close();
+});
+
+test('tags: the library keeps an unused label and delete detaches it from issues', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X', tags: ['bug', 'P0'] });
+  store.createTag('调研');
+  assert.deepEqual(store.tags(), ['bug', 'P0', '调研']);
+
+  const removed = store.deleteTag('bug');
+  assert.equal(removed.detached, 1);
+  assert.deepEqual(removed.tags, ['P0', '调研']);
+  const after = store.get(issue.id);
+  assert.deepEqual(after.tags, ['P0']);
+  assert.equal(after.type, 'P0'); // mirror follows the remaining first label
+  store.close();
+});
+
+test('tags: update replaces the whole set, and an empty array clears it', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X', tags: ['bug'] });
+  assert.deepEqual(store.update(issue.id, { tags: ['优化', '文档'] }).tags, ['优化', '文档']);
+  assert.equal(store.get(issue.id).type, '优化');
+  assert.deepEqual(store.update(issue.id, { tags: [] }).tags, []);
+  assert.equal(store.get(issue.id).type, null);
+  store.close();
+});
+
+test('tags: list filters by tag and carries the label list', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A', tags: ['bug'] });
+  store.create({ title: 'B', tags: ['优化'] });
+  const filtered = store.list({ type: 'bug' });
+  assert.equal(filtered.total, 1);
+  assert.deepEqual(filtered.items[0].tags, ['bug']);
+  assert.equal(filtered.items[0].id, a.id);
+  store.close();
+});
+
+test('tags: an old board with only issues.type migrates its labels', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-tags-'));
+  const dbPath = join(dir, 'issue.sqlite');
+  let store = openIssueStore({ dbPath });
+  const issue = store.create({ title: 'X' });
+  store.close();
+  const db = new DatabaseSync(dbPath);
+  db.prepare("UPDATE issues SET type = 'bug' WHERE id = ?").run(issue.id);
+  db.close();
+  store = openIssueStore({ dbPath });
+  assert.deepEqual(store.get(issue.id).tags, ['bug']);
+  assert.deepEqual(store.tags(), ['bug']);
+  store.close();
+});
+
+// ---- 依赖（A 依赖 B：B 完成 A 才能完成）----
+
+test('deps: link shows up on both sides', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  const linked = store.link(a.id, b.id);
+  assert.deepEqual(linked.dependsOn.map(d => d.title), ['B']);
+  assert.equal(linked.depsOpen, 1);
+  const reverse = store.get(b.id);
+  assert.deepEqual(reverse.blocks.map(d => d.title), ['A']);
+  store.close();
+});
+
+test('deps: self link and cycles are refused', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  const c = store.create({ title: 'C' });
+  assert.throws(() => store.link(a.id, a.id), err => err.code === 'SELF_LINK');
+  store.link(a.id, b.id);
+  store.link(b.id, c.id);
+  assert.throws(() => store.link(c.id, a.id), err => err.code === 'LINK_CYCLE');
+  store.close();
+});
+
+test('deps: done is blocked while a dependency is unfinished', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  store.link(a.id, b.id);
+  store.update(a.id, { status: 'dispatched' });
+  store.update(a.id, { status: 'in_review' });
+  assert.throws(() => store.update(a.id, { status: 'done' }), err => {
+    assert.equal(err.code, 'BLOCKED_BY_DEPS');
+    assert.match(err.message, /#2「B」/);
+    return true;
+  });
+  // B closes its loop, then A can complete.
+  store.update(b.id, { status: 'dispatched' });
+  store.update(b.id, { status: 'in_review' });
+  store.update(b.id, { status: 'done' });
+  assert.equal(store.update(a.id, { status: 'done' }).status, 'done');
+  store.close();
+});
+
+test('deps: a cancelled dependency still blocks completion (not a back door)', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  store.link(a.id, b.id);
+  store.update(b.id, { status: 'cancelled' });
+  store.update(a.id, { status: 'dispatched' });
+  store.update(a.id, { status: 'in_review' });
+  assert.throws(() => store.update(a.id, { status: 'done' }), err => err.code === 'BLOCKED_BY_DEPS');
+  store.close();
+});
+
+test('deps: unlink frees the issue and list carries depsOpen', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  store.link(a.id, b.id);
+  assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 1);
+  store.unlink(a.id, b.id);
+  assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 0);
+  store.update(a.id, { status: 'dispatched' });
+  store.update(a.id, { status: 'in_review' });
+  assert.equal(store.update(a.id, { status: 'done' }).status, 'done');
+  store.close();
+});
+
+test('deps: a closed issue cannot gain an unfinished prerequisite', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  store.update(a.id, { status: 'dispatched' });
+  store.update(a.id, { status: 'in_review' });
+  store.update(a.id, { status: 'done' });
+  assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
+  // a finished prerequisite is fine
+  store.update(b.id, { status: 'cancelled' });
+  assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
+  store.close();
+});

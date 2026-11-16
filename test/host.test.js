@@ -34,14 +34,14 @@ async function post(fetch, body) {
   return response.json();
 }
 
-test('host registers route, 5 tools, writeback, and start prompts the main Bot', async () => {
+test('host registers route, 7 tools, writeback, and start prompts the main Bot', async () => {
   const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
   const { ctx, routes, tools, effects, prompts } = mockCtx();
   host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
 
   assert.equal(routes.length, 1);
   assert.equal(routes[0].path, '/api/bot-issue');
-  assert.deepEqual(tools.map(t => t.name), ['issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_comment']);
+  assert.deepEqual(tools.map(t => t.name), ['issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_link', 'issue_unlink', 'issue_comment']);
   assert.ok(effects.includes('bot-issue: writeback'));
 
   const created = await post(routes[0].fetch, { action: 'create', title: '上线', body: '发布到生产' });

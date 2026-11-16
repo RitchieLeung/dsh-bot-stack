@@ -118,3 +118,52 @@ test('missing id is rejected', async () => {
   const { handle } = handler();
   assert.equal((await handle({ action: 'get' })).error.code, 'INVALID_ID');
 });
+
+test('tags flow through meta, create, tag_create and tag_delete', async () => {
+  const { handle } = handler();
+  const created = await handle({ action: 'create', title: 'X', tags: ['bug', 'P0'] });
+  assert.deepEqual(created.value.issue.tags, ['bug', 'P0']);
+  assert.deepEqual((await handle({ action: 'meta' })).value.tags, ['bug', 'P0']);
+
+  const added = await handle({ action: 'tag_create', name: '调研' });
+  assert.deepEqual(added.value.tags, ['bug', 'P0', '调研']);
+
+  const removed = await handle({ action: 'tag_delete', name: 'bug' });
+  assert.deepEqual(removed.value.tags, ['P0', '调研']);
+  assert.equal(removed.value.detached, 1);
+  assert.deepEqual((await handle({ action: 'get', id: created.value.issue.id })).value.issue.tags, ['P0']);
+});
+
+test('tag actions reject an empty name', async () => {
+  const { handle } = handler();
+  assert.equal((await handle({ action: 'tag_create', name: '  ' })).error.code, 'INVALID_TAG');
+  assert.equal((await handle({ action: 'tag_delete' })).error.code, 'INVALID_TAG');
+});
+
+test('link and unlink move a dependency both ways', async () => {
+  const { handle } = handler();
+  const a = (await handle({ action: 'create', title: 'A' })).value.issue;
+  const b = (await handle({ action: 'create', title: 'B' })).value.issue;
+
+  const linked = await handle({ action: 'link', id: a.id, dependsOn: b.id });
+  assert.deepEqual(linked.value.issue.dependsOn.map(d => d.title), ['B']);
+  const reverse = await handle({ action: 'get', id: b.id });
+  assert.deepEqual(reverse.value.issue.blocks.map(d => d.title), ['A']);
+
+  const unlinked = await handle({ action: 'unlink', id: a.id, dependsOn: b.id });
+  assert.deepEqual(unlinked.value.issue.dependsOn, []);
+  assert.equal((await handle({ action: 'unlink', id: 'nope', dependsOn: b.id })).error.code, 'NOT_FOUND');
+});
+
+test('done is refused over the HTTP contract when a dependency is open', async () => {
+  const { handle } = handler();
+  const a = (await handle({ action: 'create', title: 'A' })).value.issue;
+  const b = (await handle({ action: 'create', title: 'B' })).value.issue;
+  await handle({ action: 'link', id: a.id, dependsOn: b.id });
+  await handle({ action: 'update', id: a.id, status: 'dispatched' });
+  await handle({ action: 'update', id: a.id, status: 'in_review' });
+  const refused = await handle({ action: 'update', id: a.id, status: 'done' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error.code, 'BLOCKED_BY_DEPS');
+  assert.match(refused.error.message, /#2「B」/);
+});
