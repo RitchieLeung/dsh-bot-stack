@@ -45,13 +45,15 @@ test('get returns comments and dispatches arrays', () => {
 test('state machine rejects illegal transitions', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  assert.throws(() => store.update(issue.id, { status: 'done' }), /不能从 open 直接到 done/);
+  assert.throws(() => store.update(issue.id, { status: 'done' }), /不能从「待处理」直接到「已闭环」/);
   const moved = store.update(issue.id, { status: 'discussing' });
   assert.equal(moved.status, 'discussing');
   // a status change is recorded in the timeline
   const full = store.get(issue.id);
   assert.equal(full.comments.length, 1);
   assert.equal(full.comments[0].kind, 'status');
+  // 时间线是写给人看的：状态用中文名，不暴露 open/dispatched 这类变量名
+  assert.equal(full.comments[0].body, '状态：待处理 → 讨论中');
   store.close();
 });
 
@@ -61,6 +63,36 @@ test('dispatched can be pulled back to open (打回)', () => {
   store.update(issue.id, { status: 'dispatched' });
   const back = store.update(issue.id, { status: 'open' });
   assert.equal(back.status, 'open');
+  store.close();
+});
+
+test('system status writes use Chinese labels too', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.syncTask(issue.id, { taskId: 'T-1', status: 'dispatched' });
+  store.syncTask(issue.id, { taskId: 'T-1', status: 'done', resultText: '做完了', workerName: '玉清' });
+  const full = store.get(issue.id);
+  const statusBodies = full.comments.filter(c => c.kind === 'status').map(c => c.body);
+  assert.deepEqual(statusBodies, ['状态：待处理 → 进行中', '状态：进行中 → 待验收']);
+  store.close();
+});
+
+test('old raw-status comments are rewritten to Chinese labels when the board opens', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-labels-'));
+  const dbPath = join(dir, 'issue.sqlite');
+  let store = openIssueStore({ dbPath });
+  const issue = store.create({ title: 'X' });
+  store.close();
+  const db = new DatabaseSync(dbPath);
+  db.prepare("INSERT INTO comments (issueId, authorKind, authorName, body, kind, at) VALUES (?, 'system', '', '状态：open → dispatched', 'status', 1)").run(issue.id);
+  db.close();
+  store = openIssueStore({ dbPath });
+  const bodies = store.get(issue.id).comments.filter(c => c.kind === 'status').map(c => c.body);
+  assert.deepEqual(bodies, ['状态：待处理 → 进行中']);
+  store.close();
+  // reopening must not touch it again
+  store = openIssueStore({ dbPath });
+  assert.deepEqual(store.get(issue.id).comments.filter(c => c.kind === 'status').map(c => c.body), ['状态：待处理 → 进行中']);
   store.close();
 });
 
