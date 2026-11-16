@@ -194,3 +194,42 @@ test('result comment records the actual handler name (not "worker")', () => {
   assert.equal(result.authorName, '玉清');
   store.close();
 });
+
+test('issues get sequential #numbers starting at 1', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  const c = store.create({ title: 'C' });
+  assert.equal(a.number, 1);
+  assert.equal(b.number, 2);
+  assert.equal(c.number, 3);
+  store.close();
+});
+
+test('a #N reference resolves to the issue for get/update/comment', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  store.create({ title: 'B' });
+  assert.equal(store.get(`#${a.number}`).id, a.id);
+  assert.equal(store.get(String(a.number)).id, a.id);
+  assert.equal(store.update(`#${a.number}`, { status: 'discussing' }).status, 'discussing');
+  assert.equal(store.comment(`#${a.number}`, { body: 'hi', authorKind: 'user' }).issueId, a.id);
+  assert.throws(() => store.get('#999'), err => err.code === 'NOT_FOUND');
+  store.close();
+});
+
+test('an old board backfills #numbers in creation order', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mig2-'));
+  const dbPath = join(dir, 'old.sqlite');
+  const old = new DatabaseSync(dbPath);
+  old.exec(`CREATE TABLE issues (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', parentId TEXT, createdBy TEXT NOT NULL, createdByName TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, closedAt INTEGER, result TEXT)`);
+  const insert = old.prepare('INSERT INTO issues (id, title, body, status, createdBy, version, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  insert.run('I-old1', '老一', '', 'open', 'user', 1, 1000, 1000);
+  insert.run('I-old2', '老二', '', 'open', 'user', 1, 2000, 2000);
+  old.close();
+  const store = openIssueStore({ dbPath });
+  const byId = Object.fromEntries(store.list().items.map(issue => [issue.id, issue.number]));
+  assert.equal(byId['I-old1'], 1);
+  assert.equal(byId['I-old2'], 2);
+  store.close();
+});
