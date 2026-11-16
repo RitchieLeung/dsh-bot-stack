@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { openIssueStore, STATUSES } from '../lib/store.js';
 
 function fresh() {
@@ -147,5 +151,46 @@ test('counts returns per-status totals', () => {
   const counts = store.counts();
   assert.equal(counts.open, 2);
   assert.equal(counts.discussing, 1);
+  store.close();
+});
+
+test('create stores a custom type and types() lists the distinct ones', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A', type: 'bug' });
+  assert.equal(a.type, 'bug');
+  store.create({ title: 'B', type: 'feature' });
+  store.create({ title: 'C', type: 'bug' });
+  assert.deepEqual(store.types().sort(), ['bug', 'feature']);
+  store.close();
+});
+
+test('type can be edited', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  assert.equal(a.type, null);
+  const b = store.update(a.id, { type: '优化' });
+  assert.equal(b.type, '优化');
+  store.close();
+});
+
+test('an old board without the type column gets it on open', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mig-'));
+  const dbPath = join(dir, 'old.sqlite');
+  const old = new DatabaseSync(dbPath);
+  old.exec(`CREATE TABLE issues (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', parentId TEXT, createdBy TEXT NOT NULL, createdByName TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 1, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, closedAt INTEGER, result TEXT)`);
+  old.close();
+  const store = openIssueStore({ dbPath });
+  const issue = store.create({ title: 'X', type: 'bug' });
+  assert.equal(issue.type, 'bug');
+  store.close();
+});
+
+test('result comment records the actual handler name (not "worker")', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '做完了', workerName: '玉清' });
+  const full = store.get(issue.id);
+  const result = full.comments.find(c => c.kind === 'result');
+  assert.equal(result.authorName, '玉清');
   store.close();
 });

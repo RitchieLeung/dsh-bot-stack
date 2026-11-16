@@ -28,6 +28,14 @@ test('create/list/get round-trip', async () => {
   assert.equal(got.value.issue.comments.length, 0);
 });
 
+test('create stores type and meta reports the types in use', async () => {
+  const { handle } = handler();
+  const created = await handle({ action: 'create', title: 'X', type: 'bug' });
+  assert.equal(created.value.issue.type, 'bug');
+  const meta = await handle({ action: 'meta' });
+  assert.ok(meta.value.types.includes('bug'));
+});
+
 test('update applies a valid transition', async () => {
   const { handle } = handler();
   const { value: { issue } } = await handle({ action: 'create', title: 'X' });
