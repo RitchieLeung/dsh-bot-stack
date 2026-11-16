@@ -137,3 +137,15 @@ test('parentId must exist', () => {
 test('statuses exported for the UI', () => {
   assert.ok(STATUSES.includes('in_review'));
 });
+
+test('counts returns per-status totals', () => {
+  const store = fresh();
+  store.create({ title: 'A' });
+  store.create({ title: 'B' });
+  const c = store.create({ title: 'C' });
+  store.update(c.id, { status: 'discussing' });
+  const counts = store.counts();
+  assert.equal(counts.open, 2);
+  assert.equal(counts.discussing, 1);
+  store.close();
+});
