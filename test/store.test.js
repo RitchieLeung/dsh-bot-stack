@@ -51,6 +51,15 @@ test('state machine rejects illegal transitions', () => {
   store.close();
 });
 
+test('dispatched can be pulled back to open (打回)', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.update(issue.id, { status: 'dispatched' });
+  const back = store.update(issue.id, { status: 'open' });
+  assert.equal(back.status, 'open');
+  store.close();
+});
+
 test('version guard refuses stale writes', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });

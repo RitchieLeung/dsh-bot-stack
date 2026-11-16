@@ -53,6 +53,9 @@ test('host registers route, 5 tools, writeback, and start prompts the main Bot',
   assert.equal(prompts[0].sessionId, 'session-main');
   assert.ok(prompts[0].content[0].text.includes(id));
   assert.ok(prompts[0].content[0].text.includes('dispatch_work'));
+  // 启动成功即进入「进行中」，不等 worker 真的起来。
+  const after = await post(routes[0].fetch, { action: 'get', id });
+  assert.equal(after.value.issue.status, 'dispatched');
 });
 
 test('start refuses to re-dispatch a dispatched issue', async () => {
