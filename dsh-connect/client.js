@@ -2411,6 +2411,19 @@ function mentionTarget(event) {
   const anchor = event.target instanceof Element ? event.target.closest(`a[href^="${MENTION_ORIGIN}"]`) : null;
   return anchor ? anchor.getAttribute("href").slice(MENTION_ORIGIN.length) : null;
 }
+// 事务（issue）引用：消息里写 #12 就渲染成超链接，点击打开事务面板。用独立的
+// origin，避免和 @Bot 的 bots.local 混淆；点击由 Bubbles 的 onClickCapture 接。
+var ISSUE_ORIGIN = "https://bot-issue.local/";
+function linkIssues(text) {
+  if (!text || !/#\d/.test(text)) return text;
+  return text.replace(/(^|[^&\w/])#(\d{1,6})(?!\w)/g, (_match, before, n) => `${before}[#${n}](${ISSUE_ORIGIN}${n})`);
+}
+function issueTarget(event) {
+  const anchor = event.target instanceof Element ? event.target.closest(`a[href^="${ISSUE_ORIGIN}"]`) : null;
+  if (!anchor) return null;
+  const n = Number(anchor.getAttribute("href").slice(ISSUE_ORIGIN.length));
+  return Number.isFinite(n) ? n : null;
+}
 function clock(ms) {
   return new Date(ms).toLocaleTimeString(dateLocale(), { hour: "numeric", minute: "2-digit" });
 }
@@ -3214,6 +3227,8 @@ body{--bt-msg-w:.8;--bt-flat-w:1}
 .bt-bubble :is(img,video),.bt-ububble :is(img,video),[data-chat-flow] [class*="_bubble"] :is(img,video){max-width:100%;height:auto}
 .bt-bubble a[href^="${MENTION_ORIGIN}"]{text-decoration:none;font-weight:400;cursor:pointer;white-space:nowrap}
 .bt-bubble a[href^="${MENTION_ORIGIN}"]::before{content:"";display:inline-block;width:16px;height:16px;margin-right:3px;vertical-align:-3px;background:currentColor;-webkit-mask:${DEFAULT_MASK} center/contain no-repeat;mask:${DEFAULT_MASK} center/contain no-repeat}
+.bt-bubble a[href^="${ISSUE_ORIGIN}"]{text-decoration:none;font-weight:600;cursor:pointer}
+.bt-bubble a[href^="${ISSUE_ORIGIN}"]:hover{text-decoration:underline;text-underline-offset:2px}
 .bt-group-msg{display:flex;flex-direction:column;gap:4px;margin:16px 0 0}
 .bt-group-msg:first-child{margin-top:0}
 .bt-group-msg[data-chain-prev]{margin-top:4px}
@@ -13052,13 +13067,39 @@ function userTextParts(text, bots, referenceLabels = []) {
   if (cursor < text.length) parts.push({ text: text.slice(cursor) });
   return parts;
 }
+function userTextWithIssues(text, referenceLabels, skillNames, references) {
+  if (!/#\d/.test(text)) return ui.projectUserText(text, referenceLabels, skillNames, "skill", references);
+  const out = [];
+  const re = /#(\d{1,6})/g;
+  let last = 0;
+  let match;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) out.push((0, import_react30.createElement)(import_react30.Fragment, { key: key++ }, ui.projectUserText(text.slice(last, match.index), referenceLabels, skillNames, "skill", references)));
+    const n = Number(match[1]);
+    out.push((0, import_react30.createElement)("a", {
+      key: key++,
+      href: `${ISSUE_ORIGIN}${match[1]}`,
+      className: "bt-uissue",
+      title: `#${n}`,
+      onClick: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent("bot-issue:open", { detail: { number: n } }));
+      },
+    }, match[0]));
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) out.push((0, import_react30.createElement)(import_react30.Fragment, { key: key++ }, ui.projectUserText(text.slice(last), referenceLabels, skillNames, "skill", references)));
+  return out;
+}
 function UserText({ text, bots, referenceLabels, skillNames, references, actions }) {
   return userTextParts(text, bots, referenceLabels).map((part, index) => part.bot ? (0, import_react30.createElement)(
     "button",
     { key: index, type: "button", className: "bt-umention", title: `@${part.bot.name}`, onClick: () => actions.openSession(part.bot.id) },
     (0, import_react30.createElement)(BotMark, { bot: part.bot, size: 16 }),
     part.label
-  ) : (0, import_react30.createElement)(import_react30.Fragment, { key: index }, ui.projectUserText(part.text, referenceLabels, skillNames, "skill", references)));
+  ) : (0, import_react30.createElement)(import_react30.Fragment, { key: index }, userTextWithIssues(part.text, referenceLabels, skillNames, references)));
 }
 function Attachments({ attachments, renderMessageImages }) {
   const compact2 = attachments.length > 1;
@@ -13145,6 +13186,8 @@ var USER_MESSAGE_CSS = `
 .bt-ubody a{color:inherit}
 .bt-umention{display:inline-flex;align-items:center;gap:3px;vertical-align:-3px;max-width:100%;padding:0 1px;border:0;background:none;color:inherit;font:inherit;font-weight:600;line-height:inherit;cursor:pointer;border-radius:6px;white-space:nowrap}
 .bt-umention:hover{text-decoration:underline;text-underline-offset:2px}
+.bt-uissue{color:inherit;font-weight:600;text-decoration:none;cursor:pointer}
+.bt-uissue:hover{text-decoration:underline;text-underline-offset:2px}
 .bt-umention>:first-child{flex:none}
 .bt-uattach{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%}
 .bt-ufile{display:inline-flex;align-items:center;gap:10px;box-sizing:border-box;width:240px;min-height:64px;padding:8px 12px;border-radius:18px;border:.5px solid var(--bt-line-2);background:var(--bt-card)}
@@ -13164,6 +13207,13 @@ var import_react_dom3 = require("react-dom");
 var mdLabels3 = () => ({ code: { copyLabel: t("Copy"), copiedLabel: t("Copied") }, footnotes: t("Footnotes") });
 function Bubbles({ texts: texts2, roster, selfId, actions, streaming, sessionId, msgKey, useUi, lead, mentions, fold = FOLD_AT, whole, time }) {
   const onClick = (event) => {
+    const issue = issueTarget(event);
+    if (issue !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.dispatchEvent(new CustomEvent("bot-issue:open", { detail: { number: issue } }));
+      return;
+    }
     const target = mentionTarget(event);
     if (target === null) return;
     event.preventDefault();
@@ -13220,7 +13270,7 @@ var foldArea = (body, code, codeHead, actions) => code === void 0 ? body : (0, i
 function Bubble({ text, index, roster, selfId, actions, sessionId, msgKey, mentions, fold, picked, live, lead, whole }) {
   const { shown, folded, control, code, codeHead } = useFold(text, { limit: fold, whole, live });
   const key = msgKey ? `${msgKey}:${index}` : void 0;
-  const body = shown === "" ? null : (0, import_react31.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(shown, roster.bots, selfId), streaming: live, labels: mdLabels3(), variant: "compact", fileMentions: mentions });
+  const body = shown === "" ? null : (0, import_react31.createElement)(import_dsh_client_ui_primitives.MarkdownText, { text: linkMentions(linkIssues(shown), roster.bots, selfId), streaming: live, labels: mdLabels3(), variant: "compact", fileMentions: mentions });
   const row = (0, import_react31.useRef)(null);
   const [toolsOpen, setToolsOpen] = (0, import_react31.useState)(false);
   useDismiss(toolsOpen, () => setToolsOpen(false), [row]);
