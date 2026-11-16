@@ -3,10 +3,25 @@ import assert from 'node:assert/strict';
 import { openIssueStore } from '../lib/store.js';
 import { createIssueHandler } from '../lib/handler.js';
 
-function handler({ start, mainBot } = {}) {
+function handler({ start, mainBot, notify, rosterOf } = {}) {
   const store = openIssueStore({ dbPath: ':memory:' });
-  return { handle: createIssueHandler({ store, start, mainBot }), store };
+  return { handle: createIssueHandler({ store, start, mainBot, notify, rosterOf }), store };
 }
+
+test('comment invokes notify and meta exposes the roster', async () => {
+  const seen = [];
+  const { handle } = handler({
+    notify: (issue, comment, sessionId) => { seen.push({ issue, comment, sessionId }); },
+    rosterOf: () => [{ id: 'b1', name: '玉清', sessionId: 's-yu' }],
+  });
+  const created = await handle({ action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+  await handle({ action: 'comment', id, body: '@玉清 看下', authorKind: 'user' });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].comment.body, '@玉清 看下');
+  const meta = await handle({ action: 'meta' });
+  assert.deepEqual(meta.value.roster, [{ id: 'b1', name: '玉清', sessionId: 's-yu' }]);
+});
 
 test('meta returns statuses and main bot', async () => {
   const { handle } = handler({ mainBot: { id: 'b1', name: '鲸鱼' } });

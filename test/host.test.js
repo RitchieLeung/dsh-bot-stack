@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as host from '../lib/host.js';
 
-function makeState(mainBot) {
+function makeState(...bots) {
   const dir = mkdtempSync(join(tmpdir(), 'iss-'));
   const file = join(dir, 'state.json');
-  writeFileSync(file, JSON.stringify({ bots: { [mainBot.id]: mainBot }, mainBotIds: [mainBot.id] }));
+  writeFileSync(file, JSON.stringify({ bots: Object.fromEntries(bots.map(bot => [bot.id, bot])), mainBotIds: [bots[0].id] }));
   return file;
 }
 
@@ -78,4 +78,22 @@ test('resolveMainBot reads mainBotIds without hardcoding', () => {
   const bot = host.resolveMainBot(statePath);
   assert.equal(bot.name, '小欣');
   assert.equal(bot.sessionId, 's-xin');
+});
+
+test('a comment that @mentions a bot prompts that bot', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '玉清', sessionId: 'session-yu' },
+  );
+  const { ctx, routes, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'comment', id, body: '@玉清 帮忙看下这个', authorKind: 'user' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].sessionId, 'session-yu');
+  assert.ok(prompts[0].content[0].text.includes('玉清'));
+  assert.ok(prompts[0].content[0].text.includes('帮忙看下这个'));
 });
