@@ -23,8 +23,23 @@ test('comment invokes notify and meta exposes the roster', async () => {
   assert.deepEqual(meta.value.roster, [{ id: 'b1', name: '玉清', sessionId: 's-yu' }]);
 });
 
-test('meta returns statuses and main bot', async () => {
-  const { handle } = handler({ mainBot: { id: 'b1', name: '鲸鱼' } });
+test('create notifies the同事 mentioned in the body (same as a comment)', async () => {
+  const seen = [];
+  const { handle } = handler({ notify: (issue, payload) => { seen.push({ issue, body: payload.body }); } });
+  await handle({ action: 'create', title: 'X', body: '请 @玉清 跟进', authorKind: 'user' });
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].body, '请 @玉清 跟进');
+  assert.equal(seen[0].issue.title, 'X');
+});
+
+test('create without an @ does not notify', async () => {
+  const seen = [];
+  const { handle } = handler({ notify: (issue, payload) => { seen.push(payload); } });
+  await handle({ action: 'create', title: 'X', body: '没有提到人' });
+  assert.equal(seen.length, 0);
+});
+
+test('meta returns statuses and main bot', async () => {  const { handle } = handler({ mainBot: { id: 'b1', name: '鲸鱼' } });
   const result = await handle({ action: 'meta' });
   assert.equal(result.ok, true);
   assert.ok(result.value.statuses.includes('in_review'));
