@@ -100,18 +100,42 @@ test('start routes an image task to a vision-capable colleague', async () => {
 });
 
 
-test('start refuses to re-dispatch a dispatched issue', async () => {
-  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+test('start refuses to re-dispatch an issue already assigned to an executor', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施' },
+  );
   const { ctx, routes, prompts } = mockCtx();
   host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
   const fetch = routes[0].fetch;
   const created = await post(fetch, { action: 'create', title: 'X' });
   const id = created.value.issue.id;
-  // Simulate the poller having already marked the issue dispatched (worker in flight).
+  await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
   await post(fetch, { action: 'update', id, status: 'dispatched' });
+  prompts.length = 0;
   const started = await post(fetch, { action: 'start', id });
   assert.equal(started.value.dispatched, false);
+  assert.match(started.value.reason, /执行人/);
   assert.equal(prompts.length, 0);
+});
+
+test('没有执行人的 dispatched 老事务允许重派（#7 那种）', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施' },
+  );
+  const { ctx, routes, prompts } = mockCtx({
+    llm: { resolveModelInfo: async (_p, model) => ({ inputModalities: model.includes('gemini') ? ['text', 'image'] : ['text'] }) },
+  });
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'update', id, status: 'dispatched' }); // 手动标 dispatched，没有执行人
+  prompts.length = 0;
+  const started = await post(fetch, { action: 'start', id });
+  assert.equal(started.value.dispatched, true);
+  assert.equal(started.value.assignee.name, '伟峰');
 });
 
 test('resolveMainBot reads mainBotIds without hardcoding', () => {
@@ -221,4 +245,20 @@ test('tool schemas only use single type strings (dsh rejects type arrays like [\
     walk(tool.parameters, 'parameters', tool.name);
     walk(tool.output?.schema, 'output.schema', tool.name);
   }
+});
+
+test('面板打回且没有执行人时，知会主 Bot 接手', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' });
+  const { ctx, routes, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: '看图' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  await post(fetch, { action: 'update', id, status: 'in_review' });
+  prompts.length = 0;
+  await post(fetch, { action: 'update', id, status: 'dispatched', rejection: '事情没完成' });
+  assert.ok(prompts.length >= 1);
+  const hit = prompts.find(p => p.sessionId === 'session-main');
+  assert.ok(hit && hit.content[0].text.includes('事情没完成'));
 });

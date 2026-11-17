@@ -209,3 +209,23 @@ test('update forwards a rejection when打回重做', async () => {
   const got = await handle({ action: 'get', id: issue.id });
   assert.ok(got.value.issue.comments.some(c => c.kind === 'reject' && c.body === '结论不对，重做'));
 });
+
+test('面板打回（in_review→dispatched）会知会对侧', async () => {
+  const seen = [];
+  const { handle } = handler({ notify: (issue, payload) => { seen.push(payload.body); } });
+  const { value: { issue } } = await handle({ action: 'create', title: 'X' });
+  await handle({ action: 'update', id: issue.id, status: 'dispatched' });
+  await handle({ action: 'update', id: issue.id, status: 'in_review' });
+  seen.length = 0;
+  const rejected = await handle({ action: 'update', id: issue.id, status: 'dispatched', rejection: '事情没完成' });
+  assert.equal(rejected.ok, true);
+  assert.ok(seen.some(body => body.includes('被打回重做') && body.includes('事情没完成')));
+});
+
+test('普通状态变更（open→discussing）不打扰对侧', async () => {
+  const seen = [];
+  const { handle } = handler({ notify: (issue, payload) => { seen.push(payload.body); } });
+  const { value: { issue } } = await handle({ action: 'create', title: 'X' });
+  await handle({ action: 'update', id: issue.id, status: 'discussing' });
+  assert.equal(seen.length, 0);
+});
