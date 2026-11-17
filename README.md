@@ -12,7 +12,7 @@
 | [`dsh-plugin-bot-issue`](https://github.com/RitchieLeung/dsh-plugin-bot-issue) | 事务面板：状态机、派工、验收/打回、评论、附件 | public |
 | [`dsh-plugin-bot-knowledge`](https://github.com/RitchieLeung/dsh-plugin-bot-knowledge) | 知识库看板：每只 Bot 记了什么 + 每日工作日报 | public |
 | `dsh-plugin-bot-ebook` | 电子书面板：书库 + 阅读器 | private（未完成） |
-| `dsh-plugin-bot-restart` | 服务面板：软重载插件 / 真重启 | private（未接线） |
+| [`dsh-plugin-bot-restart`](https://github.com/RitchieLeung/dsh-plugin-bot-restart) | 服务面板：软重载插件 / 真重启 | public |
 | `dsh-bot-stack` | 本仓库，纯文档 | public |
 
 统一打 `dsh` / `cordis` / `dscord` / `dsh-plugin` topics，方便一搜全出来。
@@ -89,12 +89,12 @@ profile 是用**绝对路径**接线这些插件的：
 - 事务的 `dispatched → in_review` **不绑定执行人 session id**。这是有意的：session 会漂移，绑定会把事务锁死。代价是理论上任何 bot 都能传 `待验收`，靠 skill 规则约束。
 - dscord fork 基线是 `0.4.0-alpha.2`，上游已发到 `alpha.5`。升级要按 `FORK.md` 的清单手工重放（不是 `git merge`），因为 fork 是从 tgz 解包的，和上游没有共同祖先。
 - `dscord-fork/` 目录嵌套在 `bot-knowledge/` 里面（历史遗留），挪它要动 profile 的 `file:` 依赖。
-- `dsh-plugin-bot-restart` 写好了但**没接进 profile**。
 
 ## 上游
 
 - [`MixGeekers/dscord`](https://github.com/MixGeekers/dscord) —— fork 来源，Apache-2.0，基线 `ds-group-v0.4.0-alpha.2`
-- [`EricJiang0423/dsh-orchestrator`](https://github.com/EricJiang0423/dsh-orchestrator) —— 第三方编排插件，本地有一批补丁
+- [`EricJiang0423/dsh-orchestrator`](https://github.com/EricJiang0423/dsh-orchestrator) —— 第三方编排插件；本地改动在
+  [`RitchieLeung/dsh-orchestrator`](https://github.com/RitchieLeung/dsh-orchestrator) 的 `local-patches` 分支（8 个提交，基于上游 main）
 - [`@deepseek-ai/dsh`](https://www.npmjs.com/package/@deepseek-ai/dsh) —— 宿主本体
 
 ## 运行时
