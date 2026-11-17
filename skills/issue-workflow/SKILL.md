@@ -35,7 +35,7 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 ## 执行人的职责（承接与闭环）
 
 1. 接到 `message_bot` 的事务任务后，`issue_get` 读全文和附件，自己处理。
-   **图片/附件**：用 `read_image` 读主 Bot 给的本机文件路径（不是拿 `/api/...` 链接），才能看到图。
+   **图片/附件**：主 Bot 会把附件复制到你的工作区并给你路径，用 `read_image` 读那个本地文件（不是拿 `/api/...` 链接），才能看到图。
 2. 过程中有发现/结论，用 `issue_comment` 写进时间线（会同步给主 Bot）。
 3. 做完了：`issue_comment` 写结果/结论，再 `issue_update` 把状态推进到 `in_review`（待验收）——
    这一步会**自动知会主 Bot 来验收**。之后等主 Bot 验收，不要自己改 done。

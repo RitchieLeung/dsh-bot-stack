@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as host from '../lib/host.js';
@@ -263,11 +263,12 @@ test('面板打回且没有执行人时，知会主 Bot 接手', async () => {
   assert.ok(hit && hit.content[0].text.includes('事情没完成'));
 });
 
-test('start 把附件本机路径写进派工说明，worker 才能 read_image 看到图', async () => {
+test('start 把附件复制进执行人工作区，并给 read_image 路径', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'issue-host-att-'));
+  const kikiWork = join(dir, 'kiki-work');
   const statePath = makeState(
     { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
-    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', role: '协调' },
+    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', role: '协调', workDir: kikiWork },
   );
   const { ctx, routes, prompts } = mockCtx({
     llm: { resolveModelInfo: async (_p, model) => ({ inputModalities: model.includes('gemini') ? ['text', 'image'] : ['text'] }) },
@@ -285,6 +286,25 @@ test('start 把附件本机路径写进派工说明，worker 才能 read_image �
   const prompt = prompts.find(p => p.sessionId === 'session-main');
   const txt = prompt.content[0].text;
   assert.match(txt, /read_image/);
-  assert.ok(txt.includes(join(dir, 'attachments')), '派工说明里应带附件本机路径');
-  assert.match(txt, /不要标待验收假装完成|不要标「待验收」/);
+  assert.ok(txt.includes(join(kikiWork, 'issue-attachments')), '派工说明里应带执行人工作区里的附件路径');
+  assert.ok(existsSync(join(kikiWork, 'issue-attachments')), '附件应被复制进执行人工作区');
+  assert.match(txt, /不要标待验收假装完成/);
+});
+
+test('执行人用别的会话 id 报回时也能知会主 Bot（会话漂移）', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', segments: [{ sessionId: 'session-kiki-seg' }] },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'assign', id, sessionId: 'session-kiki', name: 'kiki' });
+  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  prompts.length = 0;
+  const upd = tools.find(t => t.name === 'issue_update');
+  await upd.execute({ id, status: 'in_review' }, { agent: { session: { id: 'session-kiki-seg' } } });
+  assert.ok(prompts.some(p => p.sessionId === 'session-main'), '应知会主 Bot');
 });
