@@ -97,3 +97,21 @@ test('a comment that @mentions a bot prompts that bot', async () => {
   assert.ok(prompts[0].content[0].text.includes('玉清'));
   assert.ok(prompts[0].content[0].text.includes('帮忙看下这个'));
 });
+
+test('every issue_list field is declared in its output schema', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, routes, tools } = mockCtx();
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const list = tools.find(tool => tool.name === 'issue_list');
+  const created = await post(routes[0].fetch, { action: 'create', title: '带父级的事务' });
+  await post(routes[0].fetch, { action: 'create', title: '子事务', parentId: created.value.issue.id });
+  const rows = await list.execute({});
+  assert.ok(rows.length >= 2);
+  // 字段必须全部声明：这条工具之前就因为漏了 parentId/updatedAt 而整体报错。
+  const declared = Object.keys(list.output.schema.items.properties);
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      assert.ok(declared.includes(key), `issue_list 的 schema 没声明 ${key}`);
+    }
+  }
+});
