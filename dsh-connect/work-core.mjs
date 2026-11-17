@@ -285,18 +285,35 @@ export class WorkCore {
     // with no word to anyone. Every ask is rejected at once and the worker carries on.
     this.ctx.get?.('approval')?.setPolicy(agent, 'never');
     await this.ctx.sessionTitle?.rename?.(agent.session, `${bot.name} · ${task.title}`).catch?.(() => {});
-    await this.selectModel(sessionId, bot.workerModel || bot.model);
+    // 工作者必须是「同一个 CLI、同一个模型」：默认跟随 Bot 自己的模型路由，
+    // 并且**校验**选上的确实是它；对不上就让任务失败，绝不悄悄用默认模型跑。
+    const wantedModel = bot.workerModel || bot.model;
+    const applied = await this.selectModel(sessionId, wantedModel);
+    const appliedRef = applied && applied.provider && applied.model ? `${applied.provider}/${applied.model}` : null;
+    if (typeof wantedModel === 'string' && wantedModel.includes('/')) {
+      if (appliedRef !== wantedModel) {
+        await this.finish(task, {
+          status: 'failed',
+          summary: `工作者模型没对上，任务不跑：期望 ${wantedModel}，实际 ${appliedRef || '(未设置)'}。`,
+          reply: '派工失败：工作者没有被配置成和我一样的模型，为了结果一致我没有让它跑。请把这条任务交给我本人或换个方式处理。',
+        }, { by: 'core' });
+        return;
+      }
+    }
+    mark(task, 'running', 'core', { model: appliedRef || wantedModel || null });
     for (const def of await compileTools(this.workerTools(task))) agent.ctx.tools.register(def);
     this.timers.set(task.id, setTimeout(() => void this.timeout(task.id), this.timeoutMs));
     await this.prompt(sessionId, this.briefText(task));
   }
 
+  /** @returns 实际记录到 Session 上的选择 `{provider, model}`，供调用方校验。 */
   async selectModel(sessionId, ref) {
-    if (typeof ref !== 'string' || !ref.includes('/')) return;
+    if (typeof ref !== 'string' || !ref.includes('/')) return undefined;
     const defaults = this.ctx.get?.('agentDefaultModel');
     const before = defaults?.currentSelection?.();
-    await this.ctx.sessionController.selectModel({ sessionId, provider: ref.slice(0, ref.indexOf('/')), model: ref.slice(ref.indexOf('/') + 1) });
+    const applied = await this.ctx.sessionController.selectModel({ sessionId, provider: ref.slice(0, ref.indexOf('/')), model: ref.slice(ref.indexOf('/') + 1) });
     if (before?.provider && before?.model) await defaults.saveSelection(before).catch(() => {});
+    return applied;
   }
 
   /** queue starts or follows a turn; steer cuts into the running turn at its next step. */
