@@ -69,5 +69,5 @@ cd dscord-fork
 profile 的依赖改回原 tgz 后 `pnpm install`：
 
 ```
-"dscord": "file:/Users/ritchie_leung/Documents/deepseek-harness/default-workspace/dscord-install/dscord-0.4.0-alpha.2.tgz"
+"dscord": "file:$HOME/Documents/deepseek-harness/default-workspace/dscord-install/dscord-0.4.0-alpha.2.tgz"
 ```

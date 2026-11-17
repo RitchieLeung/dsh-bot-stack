@@ -8,7 +8,7 @@
 # 用法：./sync.sh          同步
 #      ./sync.sh --check  只显示差异
 set -e
-TARGET=/Users/ritchie_leung/.dsh/profiles/web/node_modules/dscord
+TARGET="${DSH_HOME:-$HOME/.dsh}/profiles/web/node_modules/dscord"
 if [ "$1" = "--check" ]; then
   diff -rq --exclude=.git --exclude=node_modules --exclude=sync.sh . "$TARGET" || true
   exit 0
