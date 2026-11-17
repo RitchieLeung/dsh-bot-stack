@@ -81,3 +81,27 @@ node --test test/*.test.js                                                      
 
 再 `POST /api/bot-issue {"action":"meta"}`，`mainBot` 应该是那台机器自己的主 Bot
 （146 是小欣），`roster` 是那台的同事——不是 Mac 的鲸鱼就说明 `state.json` 读对了。
+
+## 改动怎么上线（不重启 dsh）
+
+dsh 的 HMR 只「看得见」profile 目录里的模块文件。插件如果以 `link:` 软链到 workspace，
+加载路径在 profile 外，改 host 代码不会被重载。所以插件以**真实副本**装在
+`~/.dsh/profiles/web/node_modules/dsh-plugin-<name>/`，改完代码跑：
+
+```bash
+dsh-plugin-sync              # 全部
+dsh-plugin-sync bot-issue    # 单个
+```
+
+它做三件事：rsync 源码到 profile 内的副本 → 追加一行 `# hmr-nudge` 触发 dsh-hmr 的
+`reconcileProfile()` → 等 `~/.dsh/bot/issue/health.json` 的 mtime 变新（证明真的重载了）。
+
+注意点（都是踩过的坑）：
+- **必须追加、不能重写** patch 文件：dsh-hmr 的监听认 inode，`sed -i`/`mv` 换掉 inode 就看不到变化
+- **rsync 要 `--no-times`**：保留旧 mtime 时 HMR 可能认为模块没变
+- 部署坏代码不会挂服务：那个 entry 起不来、路由 404，服务本身还活着；再同步回好代码会自动恢复
+- `health.json` 只记录 bot-issue；其他插件靠 `/plugins/events` 里还在不在来判断
+
+## 出事了先用急救台
+
+`~/dsh-rescue`（独立进程，端口 3099）能停用插件、重启 dsh、抓登录链接，见那边的 README。
