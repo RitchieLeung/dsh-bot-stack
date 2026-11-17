@@ -1,0 +1,14 @@
+{
+  "at": 1794894280775,
+  "pid": 84965,
+  "registered": [
+    "issue_create",
+    "issue_list",
+    "issue_get",
+    "issue_update",
+    "issue_link",
+    "issue_unlink",
+    "issue_comment"
+  ],
+  "failed": []
+}
