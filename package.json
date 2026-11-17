@@ -17,5 +17,10 @@
       "platform": "web",
       "immediately": true
     }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node scripts/check.mjs",
+    "check": "node scripts/check.mjs && node --test test/*.test.js"
   }
 }
