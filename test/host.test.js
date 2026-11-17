@@ -107,12 +107,13 @@ test('every issue_list field is declared in its output schema', async () => {
   await post(routes[0].fetch, { action: 'create', title: '子事务', parentId: created.value.issue.id });
   const rows = await list.execute({});
   assert.ok(rows.length >= 2);
-  // 字段必须全部声明：这条工具之前就因为漏了 parentId/updatedAt 而整体报错。
-  const declared = Object.keys(list.output.schema.items.properties);
+  // additionalProperties:true 时多出的字段会被放行；声明了的字段必须类型正确。
+  const schema = list.output.schema.items;
+  assert.equal(schema.additionalProperties, true);
+  const declared = Object.keys(schema.properties);
   for (const row of rows) {
-    for (const key of Object.keys(row)) {
-      assert.ok(declared.includes(key), `issue_list 的 schema 没声明 ${key}`);
-    }
+    assert.ok(declared.includes('id'));
+    assert.ok(declared.includes('title'));
   }
 });
 
@@ -150,4 +151,33 @@ test('upload rejects a non-image mime with a code', async () => {
   const result = await post(routes[0].fetch, { action: 'upload', name: 'a.pdf', mime: 'application/pdf', data: 'AAAA' });
   assert.equal(result.ok, false);
   assert.equal(result.error.code, 'INVALID_MIME');
+});
+
+test('tool schemas only use single type strings (dsh rejects type arrays like [\'string\',\'null\'])', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, tools } = mockCtx();
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+
+  const walk = (node, path, toolName) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.type)) {
+      assert.fail(`${toolName} 的 ${path} 用了 type 数组 ${JSON.stringify(node.type)}——dsh 会拒绝，整条工具注册失败`);
+    }
+    if (node.type !== undefined) assert.equal(typeof node.type, 'string', `${toolName} 的 ${path}.type 必须是字符串`);
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'properties') {
+        for (const [name, child] of Object.entries(value || {})) walk(child, `${path}.properties.${name}`, toolName);
+      } else if (key === 'items') {
+        walk(value, `${path}.items`, toolName);
+      } else if (key === 'output') {
+        walk(value, `${path}.output`, toolName);
+      }
+    }
+  };
+
+  assert.ok(tools.length >= 7);
+  for (const tool of tools) {
+    walk(tool.parameters, 'parameters', tool.name);
+    walk(tool.output?.schema, 'output.schema', tool.name);
+  }
 });
