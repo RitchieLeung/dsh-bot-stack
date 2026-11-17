@@ -62,7 +62,7 @@ node --test test/*.test.js
 
 ## 装到另一台 dsh 主机（以 146 为例）
 
-`ssh 146.56.202.108`，四条都要做，少一条就是「面板在但 Bot 用不了」。
+`ssh <your-host>`，四条都要做，少一条就是「面板在但 Bot 用不了」。
 
 1. **插件本体**：`rsync -a --exclude=node_modules bot-issue/ 146:/home/liangliqiang/bot-issue/`
 2. **装进 profile**（`link:`，改代码刷新页面即可，不用重装）：

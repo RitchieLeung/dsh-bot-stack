@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node 22+ / `node:sqlite` / Cordis 插件（`dsh-plugin-bot-issue`）/ `node --test`。
 
-**Spec:** [docs/2026-11-17-issue-workflow-design.md](</Users/ritchie_leung/.dsh/bot/workspace/bot-issue/docs/2026-11-17-issue-workflow-design.md>)
+**Spec:** [docs/2026-11-17-issue-workflow-design.md](<$DSH_HOME/bot/workspace/bot-issue/docs/2026-11-17-issue-workflow-design.md>)
 
 ## Global Constraints
 
@@ -381,7 +381,7 @@ git commit -m "feat(skill): 内置「事务规则」provider skill"
 ## 完成前总验证
 
 ```bash
-cd /Users/ritchie_leung/.dsh/bot/workspace/bot-issue
+cd $DSH_HOME/bot/workspace/bot-issue
 node --test test/*.test.js          # 全绿（原 59+ 不回归）
 node --check lib/store.js lib/handler.js lib/host.js lib/routing.js lib/skill.js lib/client.js
 ```
