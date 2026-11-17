@@ -443,3 +443,64 @@ test('attachments: 只收图片、空内容/超大内容会被拒', () => {
   assert.equal(store.getAttachment('nope'), null);
   store.close();
 });
+
+// ---- 执行人 / 负载 / versions（Task 1）----
+
+test('assign 把执行人落到事务上并可通过 get 读回', () => {
+  const store = fresh();
+  const issue = store.create({ title: '看图' });
+  store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user', name: '用户' });
+  const full = store.get(issue.id);
+  assert.equal(full.assignee.sessionId, 's-1');
+  assert.equal(full.assignee.name, '伟峰');
+  assert.equal(typeof full.assignee.at, 'number');
+  // 指派写进时间线
+  assert.ok(full.comments.some(c => c.kind === 'assign' && c.body.includes('伟峰')));
+  store.close();
+});
+
+test('assign 非主 Bot/人 抛 FORBIDDEN_ASSIGN', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  assert.throws(() => store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'agent', name: '玉清', isMain: false }), err => err.code === 'FORBIDDEN_ASSIGN');
+  assert.throws(() => store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'system', name: '' }), err => err.code === 'FORBIDDEN_ASSIGN');
+  store.close();
+});
+
+test('assign 缺 sessionId 抛 INVALID_ASSIGNEE', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  assert.throws(() => store.assign(issue.id, { sessionId: '', name: 'x' }, { kind: 'user' }), err => err.code === 'INVALID_ASSIGNEE');
+  store.close();
+});
+
+test('loads 只统计进行中/待验收的指派事务', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  const c = store.create({ title: 'C' });
+  const d = store.create({ title: 'D' });
+  store.assign(a.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
+  store.update(a.id, { status: 'dispatched' }, { kind: 'user' });
+  store.assign(b.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
+  store.update(b.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(b.id, { status: 'in_review' }, { kind: 'user' });
+  store.assign(c.id, { sessionId: 's-2', name: '玉清' }, { kind: 'user' });
+  store.update(c.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(c.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(c.id, { status: 'done' }, { kind: 'user' }); // 已闭环不算
+  // d 无 assignee，不算
+  assert.deepEqual(store.loads(), { 's-1': 2 });
+  store.close();
+});
+
+test('versions 返回 id/number/version/updatedAt', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  const rows = store.versions();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, issue.id);
+  assert.equal(rows[0].version, 1);
+  assert.equal(typeof rows[0].updatedAt, 'number');
+  store.close();
+});
