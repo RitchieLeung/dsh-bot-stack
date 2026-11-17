@@ -15,7 +15,7 @@
 - 插件 id `bot-knowledge`；包名 `dsh-plugin-bot-knowledge`；locale 命名空间 `bot-knowledge`。
 - 只用 Node 24 内置 `node:sqlite`；**不新增任何 npm 依赖**。
 - `knowledge.sqlite` **只读**：任何代码路径都不得写、不得改 schema、不得 VACUUM。
-- 不修改 `/Users/ritchie_leung/.dsh/profiles/web/node_modules/dscord/` 下任何文件。
+- 不修改 `$DSH_HOME/profiles/web/node_modules/dscord/` 下任何文件。
 - Client 半是**普通脚本**（不是 ESM），唯一入口是 `window.__ModuleLoader__.load({ id, factory })`；`factory(require)` 里可 `require('react')`。图标用内联 SVG，不猜 primitives 的导出名。
 - 样式只用主题 token：`--dsw-alias-bg-base`、`--dsw-alias-bg-layer-1`、`--dsw-alias-bg-layer-2`、`--dsw-alias-border-l1`、`--dsw-alias-border-l2`、`--dsw-alias-label-primary`、`--dsw-alias-label-secondary`、`--dsw-alias-brand-primary`、`--dsw-alias-state-error-primary`、`--dsw-alias-state-warn-primary`、`--dsw-alias-state-success-primary`。
 - 默认路径：`~/.dsh/bot/knowledge/knowledge.sqlite`、`~/.dsh/bot/state.json`，可用 `DSH_HOME` 覆盖。
@@ -82,9 +82,9 @@
 
 - [ ] **Step 5: 装进 web profile（需要工作区外写入，逐条审批）**
 
-先备份 `/Users/ritchie_leung/.dsh/profiles/web/package.json`，然后二选一：
-- 用 plugin_manager `install_bundle`，spec 为 `file:/Users/ritchie_leung/.dsh/bot/workspace/bot-knowledge`；
-- 或手工在 profile 的 `package.json` 加 `"dsh-plugin-bot-knowledge": "file:/Users/ritchie_leung/.dsh/bot/workspace/bot-knowledge"` 到 `dependencies`、加 `"dsh-plugin-bot-knowledge"` 到 `dsh.profile.bundles`，再在 profile 目录跑 `pnpm install --ignore-scripts`。
+先备份 `$DSH_HOME/profiles/web/package.json`，然后二选一：
+- 用 plugin_manager `install_bundle`，spec 为 `file:$DSH_HOME/bot/workspace/bot-knowledge`；
+- 或手工在 profile 的 `package.json` 加 `"dsh-plugin-bot-knowledge": "file:$DSH_HOME/bot/workspace/bot-knowledge"` 到 `dependencies`、加 `"dsh-plugin-bot-knowledge"` 到 `dsh.profile.bundles`，再在 profile 目录跑 `pnpm install --ignore-scripts`。
 
 **若需要重启 `dsh web` 才能生效，先停下来问用户**——重启可能中断当前会话。
 
@@ -96,7 +96,7 @@ Expected: 图标可见、页面可打开。若图标没出现，先看浏览器 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/ritchie_leung/.dsh/bot/workspace/bot-knowledge && git init -q 2>/dev/null; git add -A && git commit -m "feat: bot-knowledge plugin skeleton with visible panel"
+cd $DSH_HOME/bot/workspace/bot-knowledge && git init -q 2>/dev/null; git add -A && git commit -m "feat: bot-knowledge plugin skeleton with visible panel"
 ```
 
 ---

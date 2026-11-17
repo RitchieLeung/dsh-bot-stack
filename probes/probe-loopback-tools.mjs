@@ -7,7 +7,7 @@
  * 用法：node probe-loopback-tools.mjs
  * 期望：打印 HTTP 200 与 tools 数组；若回归会打印 500。
  */
-import { LoopbackMcp } from '/Users/ritchie_leung/.dsh/bot/workspace/bot-knowledge/dscord-fork/vendor/ds-bot/src/host/local-agents/mcp.js'
+const { LoopbackMcp } = await import(`${process.env.HOME}/.dsh/bot/workspace/bot-knowledge/dscord-fork/vendor/ds-bot/src/host/local-agents/mcp.js`)
 
 // 与 adapter.js 的调用约定一致：tools 是「返回工具数组」的函数，单层传入。
 const tools = () => [{ name: 'remember', description: 'write a memory', parameters: { type: 'object', properties: {} } }]

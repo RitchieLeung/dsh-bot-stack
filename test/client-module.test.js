@@ -15,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 const clientPath = path.join(root, 'lib', 'client.js');
-const PROFILE_MODULES = process.env.DSH_PROFILE_MODULES || '/Users/ritchie_leung/.dsh/profiles/web/node_modules/';
+const PROFILE_MODULES = process.env.DSH_PROFILE_MODULES
+  || path.join(process.env.HOME || '/tmp', '.dsh/profiles/web/node_modules/');
 
 function packageName() {
   return JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).name;

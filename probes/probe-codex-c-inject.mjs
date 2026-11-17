@@ -57,7 +57,7 @@ const port = server.address().port
 log(`probe MCP listening http://127.0.0.1:${port}/mcp`)
 
 // ---- spawn codex app-server，带 -c 注入 ----
-const bin = '/Users/ritchie_leung/.local/bin/codex'
+const bin = `${process.env.HOME}/.local/bin/codex`
 const child = spawn(bin, ['app-server', '--listen', 'stdio://', '-c', `mcp_servers.probe={url="http://127.0.0.1:${port}/mcp"}`], { stdio: ['pipe', 'pipe', 'inherit'] })
 
 let rest = ''

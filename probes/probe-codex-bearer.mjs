@@ -50,7 +50,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const port = server.address().port
 log(`probe (auth) listening :${port}`)
 
-const child = spawn('/Users/ritchie_leung/.local/bin/codex',
+const child = spawn(`${process.env.HOME}/.local/bin/codex`,
   ['app-server', '--listen', 'stdio://', '-c', `mcp_servers.probe={url="http://127.0.0.1:${port}/mcp", bearer_token_env_var="PROBE_TOKEN"}`],
   { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, PROBE_TOKEN: SECRET } })
 

@@ -25,7 +25,7 @@
  *
  * Usage:
  *   node patches/dscord-memory-session.mjs [--check] [dscord-dir]
- *   (default dscord-dir: /Users/ritchie_leung/.dsh/profiles/web/node_modules/dscord)
+ *   (default dscord-dir: $DSH_HOME/profiles/web/node_modules/dscord)
  *
  * Re-run after any dscord upgrade or reinstall.
  */
@@ -33,7 +33,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-const DEFAULT_DSCORD = '/Users/ritchie_leung/.dsh/profiles/web/node_modules/dscord'
+const DEFAULT_DSCORD = `${process.env.HOME}/.dsh/profiles/web/node_modules/dscord`
 const REVIEW_MODEL_DEFAULT = 'deepseek-official/deepseek-flash'
 
 const args = process.argv.slice(2)

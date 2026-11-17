@@ -36,7 +36,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
-const DEFAULT_DSCORD = '/Users/ritchie_leung/.dsh/profiles/web/node_modules/dscord'
+const DEFAULT_DSCORD = `${process.env.HOME}/.dsh/profiles/web/node_modules/dscord`
 const args = process.argv.slice(2)
 const checkOnly = args.includes('--check')
 const dir = args.find(argument => !argument.startsWith('--')) ?? DEFAULT_DSCORD

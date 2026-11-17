@@ -9,7 +9,7 @@
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 
-const MOD = '/Users/ritchie_leung/.dsh/bot/workspace/bot-knowledge/dscord-fork/vendor/ds-bot/src/host/local-agents'
+const MOD = `${process.env.HOME}/.dsh/bot/workspace/bot-knowledge/dscord-fork/vendor/ds-bot/src/host/local-agents`
 const { CodexEngine } = await import(`${MOD}/codex.js`)
 const { ENGINES } = await import(`${MOD}/engines.js`)
 const { findExecutable } = await import(`${MOD}/discover.js`)
