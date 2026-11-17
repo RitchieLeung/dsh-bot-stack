@@ -361,7 +361,7 @@ test('deps: done is blocked while a dependency is unfinished', () => {
   store.link(a.id, b.id);
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.throws(() => store.update(a.id, { status: 'done' }), err => {
+  assert.throws(() => store.update(a.id, { status: 'done' }, { kind: 'user' }), err => {
     assert.equal(err.code, 'BLOCKED_BY_DEPS');
     assert.match(err.message, /#2「B」/);
     return true;
@@ -369,8 +369,8 @@ test('deps: done is blocked while a dependency is unfinished', () => {
   // B closes its loop, then A can complete.
   store.update(b.id, { status: 'dispatched' });
   store.update(b.id, { status: 'in_review' });
-  store.update(b.id, { status: 'done' });
-  assert.equal(store.update(a.id, { status: 'done' }).status, 'done');
+  store.update(b.id, { status: 'done' }, { kind: 'user' });
+  assert.equal(store.update(a.id, { status: 'done' }, { kind: 'user' }).status, 'done');
   store.close();
 });
 
@@ -382,7 +382,7 @@ test('deps: a cancelled dependency still blocks completion (not a back door)', (
   store.update(b.id, { status: 'cancelled' });
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.throws(() => store.update(a.id, { status: 'done' }), err => err.code === 'BLOCKED_BY_DEPS');
+  assert.throws(() => store.update(a.id, { status: 'done' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_DEPS');
   store.close();
 });
 
@@ -396,7 +396,7 @@ test('deps: unlink frees the issue and list carries depsOpen', () => {
   assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 0);
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.equal(store.update(a.id, { status: 'done' }).status, 'done');
+  assert.equal(store.update(a.id, { status: 'done' }, { kind: 'user' }).status, 'done');
   store.close();
 });
 
@@ -406,7 +406,7 @@ test('deps: a closed issue cannot gain an unfinished prerequisite', () => {
   const b = store.create({ title: 'B' });
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  store.update(a.id, { status: 'done' });
+  store.update(a.id, { status: 'done' }, { kind: 'user' });
   assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
   // a finished prerequisite is fine
   store.update(b.id, { status: 'cancelled' });
@@ -502,5 +502,52 @@ test('versions 返回 id/number/version/updatedAt', () => {
   assert.equal(rows[0].id, issue.id);
   assert.equal(rows[0].version, 1);
   assert.equal(typeof rows[0].updatedAt, 'number');
+  store.close();
+});
+
+// ---- 打回 + actor 门（Task 2）----
+
+/** 把一条事务推到「待验收」并指派给伟峰，返回 {store, id}。 */
+function toInReview() {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
+  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  return { store, id: issue.id };
+}
+
+test('in_review→dispatched 打回重做，必须带意见', () => {
+  const { store, id } = toInReview();
+  assert.throws(() => store.update(id, { status: 'dispatched' }, { kind: 'agent', name: '鲸鱼', isMain: true }), err => err.code === 'REJECTION_REQUIRED');
+  const done = store.update(id, { status: 'dispatched', rejection: '结论不对，重做' }, { kind: 'agent', name: '鲸鱼', isMain: true });
+  assert.equal(done.status, 'dispatched');
+  const full = store.get(id);
+  assert.ok(full.comments.some(c => c.kind === 'reject' && c.body === '结论不对，重做'));
+  store.close();
+});
+
+test('验收通过（in_review→done）只有主 Bot 或人能做', () => {
+  const { store, id } = toInReview();
+  assert.throws(() => store.update(id, { status: 'done' }, { kind: 'agent', name: '伟峰', isMain: false }), err => err.code === 'FORBIDDEN_TRANSITION');
+  const done = store.update(id, { status: 'done' }, { kind: 'agent', name: '鲸鱼', isMain: true });
+  assert.equal(done.status, 'done');
+  store.close();
+});
+
+test('打回（in_review→dispatched）也只有主 Bot 或人能做', () => {
+  const { store, id } = toInReview();
+  assert.throws(() => store.update(id, { status: 'dispatched', rejection: 'x' }, { kind: 'agent', name: '伟峰', isMain: false }), err => err.code === 'FORBIDDEN_TRANSITION');
+  store.close();
+});
+
+test('worker 可把自己那单 进行中→待验收（交结果）', () => {
+  const { store, id } = toInReview();
+  // toInReview 里已经由 worker（isMain:false）推进到 in_review，这里再开一单验证 dispatched→in_review
+  const issue = store.create({ title: 'Y' });
+  store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
+  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
+  const reported = store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  assert.equal(reported.status, 'in_review');
   store.close();
 });
