@@ -12,17 +12,20 @@ function makeState(...bots) {
   return file;
 }
 
-function mockCtx() {
+function mockCtx({ llm } = {}) {
   const routes = [];
   const tools = [];
   const effects = [];
   const prompts = [];
+  const llmService = llm || { resolveModelInfo: async () => ({ inputModalities: ['text'] }) };
   const ctx = {
     effect(fn, label) { effects.push(label); fn(); },
     connection: { fetch: { register(def) { routes.push(def); } } },
     inject(names, cb) {
       if (names.includes('tools')) cb({ effect(fn) { fn(); }, tools: { register(def) { tools.push(def); } } });
       if (names.includes('sessionController')) cb({ sessionController: { prompt: async payload => { prompts.push(payload); } } });
+      if (names.includes('llm')) cb({ llm: llmService });
+      if (names.includes('skills')) cb({ skills: { registerProvider: () => () => {} } });
     },
     get() { return null; },
   };
@@ -34,8 +37,11 @@ async function post(fetch, body) {
   return response.json();
 }
 
-test('host registers route, 7 tools, writeback, and start prompts the main Bot', async () => {
-  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+test('host registers route, 7 tools, writeback, and start routes to a colleague', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施', instructions: '后端' },
+  );
   const { ctx, routes, tools, effects, prompts } = mockCtx();
   host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
 
@@ -49,15 +55,50 @@ test('host registers route, 7 tools, writeback, and start prompts the main Bot',
 
   const started = await post(routes[0].fetch, { action: 'start', id });
   assert.equal(started.value.dispatched, true);
+  assert.equal(started.value.assignee.name, '伟峰');
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].sessionId, 'session-main');
-  assert.ok(prompts[0].content[0].text.includes(id));
+  assert.ok(prompts[0].content[0].text.includes('伟峰'));
   assert.ok(prompts[0].content[0].text.includes('message_bot'));
-  assert.ok(prompts[0].content[0].text.includes('list_bots'));
-  // 启动成功即进入「进行中」，不等 worker 真的起来。
+  assert.ok(!prompts[0].content[0].text.includes('list_bots')); // 不再让主 bot 自由挑人
+  // 启动成功即进入「进行中」，且执行人已落库，不等 worker 真的起来。
   const after = await post(routes[0].fetch, { action: 'get', id });
   assert.equal(after.value.issue.status, 'dispatched');
+  assert.equal(after.value.issue.assignee.name, '伟峰');
 });
+
+test('start refuses an image task when no colleague can view images', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施' },
+  );
+  const { ctx, routes, prompts } = mockCtx(); // llm 默认 text-only
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: '看图', body: '![图](/api/bot-issue?attachment=abc)' });
+  const started = await post(fetch, { action: 'start', id: created.value.issue.id });
+  assert.equal(started.value.dispatched, false);
+  assert.match(started.value.reason, /看图|vision/);
+  assert.equal(prompts.length, 0);
+});
+
+test('start routes an image task to a vision-capable colleague', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施' },
+    { id: 'bot-3', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', role: '协调' },
+  );
+  const { ctx, routes } = mockCtx({
+    llm: { resolveModelInfo: async (_p, model) => ({ inputModalities: model.includes('gemini') ? ['text', 'image'] : ['text'] }) },
+  });
+  host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: '看图', body: '![图](/api/bot-issue?attachment=abc)' });
+  const started = await post(fetch, { action: 'start', id: created.value.issue.id });
+  assert.equal(started.value.dispatched, true);
+  assert.equal(started.value.assignee.name, 'kiki');
+});
+
 
 test('start refuses to re-dispatch a dispatched issue', async () => {
   const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
