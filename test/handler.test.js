@@ -167,3 +167,45 @@ test('done is refused over the HTTP contract when a dependency is open', async (
   assert.equal(refused.error.code, 'BLOCKED_BY_DEPS');
   assert.match(refused.error.message, /#2「B」/);
 });
+
+test('assign action sets the executor', async () => {
+  const { handle } = handler();
+  const { value: { issue } } = await handle({ action: 'create', title: 'X' });
+  const result = await handle({ action: 'assign', id: issue.id, sessionId: 's-1', name: '伟峰' });
+  assert.equal(result.ok, true);
+  assert.equal(result.value.issue.assignee.name, '伟峰');
+  const got = await handle({ action: 'get', id: issue.id });
+  assert.equal(got.value.issue.assignee.sessionId, 's-1');
+});
+
+test('assign rejects a missing sessionId', async () => {
+  const { handle } = handler();
+  const { value: { issue } } = await handle({ action: 'create', title: 'X' });
+  const result = await handle({ action: 'assign', id: issue.id });
+  assert.equal(result.error.code, 'INVALID_ID');
+});
+
+test('meta returns versions', async () => {
+  const { handle } = handler();
+  await handle({ action: 'create', title: 'X' });
+  const meta = await handle({ action: 'meta' });
+  assert.ok(Array.isArray(meta.value.versions));
+  assert.equal(meta.value.versions.length, 1);
+  assert.equal(typeof meta.value.versions[0].version, 'number');
+});
+
+test('update forwards a rejection when打回重做', async () => {
+  const { handle } = handler();
+  const { value: { issue } } = await handle({ action: 'create', title: 'X' });
+  await handle({ action: 'assign', id: issue.id, sessionId: 's-1', name: '伟峰' });
+  await handle({ action: 'update', id: issue.id, status: 'dispatched' });
+  await handle({ action: 'update', id: issue.id, status: 'in_review' });
+  // 打回不带意见 → 拒绝
+  const noOpinion = await handle({ action: 'update', id: issue.id, status: 'dispatched' });
+  assert.equal(noOpinion.error.code, 'REJECTION_REQUIRED');
+  // 带意见 → 成功 + reject 评论
+  const rejected = await handle({ action: 'update', id: issue.id, status: 'dispatched', rejection: '结论不对，重做' });
+  assert.equal(rejected.value.issue.status, 'dispatched');
+  const got = await handle({ action: 'get', id: issue.id });
+  assert.ok(got.value.issue.comments.some(c => c.kind === 'reject' && c.body === '结论不对，重做'));
+});
