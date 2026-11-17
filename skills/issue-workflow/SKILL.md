@@ -25,6 +25,8 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
    你只需要 `message_bot` 把任务说明发给被点名的这位——**不要另挑人**。
 3. 任务说明要自包含（对方看不到你的对话）：写清事务编号、要做什么、验收标准，以及
    「做完用 `issue_comment` 写结果 + `issue_update` 推进到 in_review」。
+   **事务带图片/附件时**：把附件的**本机文件路径**一并写进 message（对方用 `read_image` 读路径才能看到，
+   只给 `/api/...` 链接是看不到的）。
 4. 执行人交结果（in_review）后，你要 `issue_get` 验收：合格 → `issue_update` 到 done；不合格 →
    `issue_update` 到 dispatched 并带 `rejection`（打回意见）。
 5. 执行人说忙/做不了 → 你改派（改执行人）；执行人说任务太大 → 你用 `issue_create(parentId=…)`
@@ -33,11 +35,12 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 ## 执行人的职责（承接与闭环）
 
 1. 接到 `message_bot` 的事务任务后，`issue_get` 读全文和附件，自己处理。
+   **图片/附件**：用 `read_image` 读主 Bot 给的本机文件路径（不是拿 `/api/...` 链接），才能看到图。
 2. 过程中有发现/结论，用 `issue_comment` 写进时间线（会同步给主 Bot）。
 3. 做完了：`issue_comment` 写结果/结论，再 `issue_update` 把状态推进到 `in_review`（待验收）——
    这一步会**自动知会主 Bot 来验收**。之后等主 Bot 验收，不要自己改 done。
-4. 做不了 / 正忙 / 任务太大：不要自己改状态装样子，用 `message_bot` 找主 Bot 说明
-   （请求改派、或请求拆成子任务）。
+4. 做不了 / 正忙 / 任务太大 / 看不到图（`read_image` 报 does not declare image input）：**不要标待验收假装完成**，
+   用 `issue_comment` 说明原因，再用 `message_bot` 找主 Bot 改派或拆任务。
 5. 只有主 Bot 能 `done`（验收通过）或打回；你只能推进到 `in_review`。
 
 ## 评论同步

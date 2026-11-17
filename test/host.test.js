@@ -262,3 +262,29 @@ test('面板打回且没有执行人时，知会主 Bot 接手', async () => {
   const hit = prompts.find(p => p.sessionId === 'session-main');
   assert.ok(hit && hit.content[0].text.includes('事情没完成'));
 });
+
+test('start 把附件本机路径写进派工说明，worker 才能 read_image 看到图', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-host-att-'));
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
+    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', role: '协调' },
+  );
+  const { ctx, routes, prompts } = mockCtx({
+    llm: { resolveModelInfo: async (_p, model) => ({ inputModalities: model.includes('gemini') ? ['text', 'image'] : ['text'] }) },
+  });
+  host.apply(ctx, { dbPath: join(dir, 'issue.sqlite'), statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const fetch = routes[0].fetch;
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const created = await post(fetch, { action: 'create', title: '看图', body: '' });
+  const id = created.value.issue.id;
+  const uploaded = await post(fetch, { action: 'upload', id, name: 'cover.png', mime: 'image/png', data: png.toString('base64') });
+  const url = uploaded.value.image.url;
+  await post(fetch, { action: 'update', id, body: `![cover](${url})` });
+  const started = await post(fetch, { action: 'start', id });
+  assert.equal(started.value.dispatched, true);
+  const prompt = prompts.find(p => p.sessionId === 'session-main');
+  const txt = prompt.content[0].text;
+  assert.match(txt, /read_image/);
+  assert.ok(txt.includes(join(dir, 'attachments')), '派工说明里应带附件本机路径');
+  assert.match(txt, /不要标待验收假装完成|不要标「待验收」/);
+});
