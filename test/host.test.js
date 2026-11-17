@@ -61,6 +61,7 @@ test('host registers route, 7 tools, writeback, and start routes to a colleague'
   assert.ok(prompts[0].content[0].text.includes('伟峰'));
   assert.ok(prompts[0].content[0].text.includes('message_bot'));
   assert.ok(!prompts[0].content[0].text.includes('list_bots')); // 不再让主 bot 自由挑人
+  assert.match(prompts[0].content[0].text, /不是用户指定/); // 明确是系统选的，不是用户指定的
   // 启动成功即进入「进行中」，且执行人已落库，不等 worker 真的起来。
   const after = await post(routes[0].fetch, { action: 'get', id });
   assert.equal(after.value.issue.status, 'dispatched');
