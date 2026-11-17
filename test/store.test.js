@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -411,5 +411,35 @@ test('deps: a closed issue cannot gain an unfinished prerequisite', () => {
   // a finished prerequisite is fine
   store.update(b.id, { status: 'cancelled' });
   assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
+  store.close();
+});
+
+// ---- 附件（图片）----
+
+test('attachments: 存图落到文件、返回可用的 url、按内容去重', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-att-'));
+  const store = openIssueStore({ dbPath: join(dir, 'issue.sqlite'), attachmentsDir: join(dir, 'attachments') });
+  const issue = store.create({ title: 'X' });
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const first = store.addAttachment({ issueId: issue.id, name: '截图.png', mime: 'image/png', data: png.toString('base64') });
+  assert.match(first.url, /^\/api\/bot-issue\?attachment=[0-9a-f]{16}$/);
+  assert.equal(first.bytes, png.length);
+  const file = store.getAttachment(first.id);
+  assert.ok(file);
+  assert.equal(file.mime, 'image/png');
+  assert.equal(readFileSync(file.filePath).length, png.length);
+  // 同一张图再传一次：同一个 id，不会写两份
+  const again = store.addAttachment({ name: '再来一张', mime: 'image/png', data: png.toString('base64') });
+  assert.equal(again.id, first.id);
+  store.close();
+});
+
+test('attachments: 只收图片、空内容/超大内容会被拒', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-att-'));
+  const store = openIssueStore({ dbPath: join(dir, 'issue.sqlite'), attachmentsDir: join(dir, 'attachments') });
+  assert.throws(() => store.addAttachment({ mime: 'application/pdf', data: 'AAAA' }), err => err.code === 'INVALID_MIME');
+  assert.throws(() => store.addAttachment({ mime: 'image/png', data: '' }), err => err.code === 'INVALID_DATA');
+  assert.throws(() => store.addAttachment({ mime: 'image/png', data: Buffer.alloc(11 * 1024 * 1024).toString('base64') }), err => err.code === 'TOO_LARGE');
+  assert.equal(store.getAttachment('nope'), null);
   store.close();
 });

@@ -115,3 +115,39 @@ test('every issue_list field is declared in its output schema', async () => {
     }
   }
 });
+
+test('upload via POST then fetch the bytes via GET ?attachment=', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-host-att-'));
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, routes } = mockCtx();
+  host.apply(ctx, { dbPath: join(dir, 'issue.sqlite'), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+
+  const issue = await post(fetch, { action: 'create', title: '带图的事务' });
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const uploaded = await post(fetch, {
+    action: 'upload', id: issue.value.issue.id, name: '截图.png', mime: 'image/png', data: png.toString('base64'),
+  });
+  assert.equal(uploaded.ok, true);
+  const url = uploaded.value.image.url;
+  assert.match(url, /^\/api\/bot-issue\?attachment=/);
+
+  const response = await fetch(new Request(`http://localhost${url}`, { method: 'GET' }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/png');
+  const bytes = Buffer.from(await response.arrayBuffer());
+  assert.equal(bytes.length, png.length);
+
+  const missing = await fetch(new Request('http://localhost/api/bot-issue?attachment=deadbeef', { method: 'GET' }));
+  assert.equal(missing.status, 404);
+});
+
+test('upload rejects a non-image mime with a code', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-host-att-'));
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, routes } = mockCtx();
+  host.apply(ctx, { dbPath: join(dir, 'issue.sqlite'), statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
+  const result = await post(routes[0].fetch, { action: 'upload', name: 'a.pdf', mime: 'application/pdf', data: 'AAAA' });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'INVALID_MIME');
+});
