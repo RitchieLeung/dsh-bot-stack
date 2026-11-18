@@ -229,3 +229,19 @@ test('普通状态变更（open→discussing）不打扰对侧', async () => {
   await handle({ action: 'update', id: issue.id, status: 'discussing' });
   assert.equal(seen.length, 0);
 });
+
+test('seen action stores read versions and meta returns them', async () => {
+  const { handle } = handler();
+  const created = await handle({ action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+
+  const marked = await handle({ action: 'seen', id, version: 2 });
+  assert.equal(marked.ok, true);
+  assert.deepEqual(marked.value.seen, { [id]: 2 });
+  const meta = await handle({ action: 'meta' });
+  assert.deepEqual(meta.value.seen, { [id]: 2 });
+  assert.equal(meta.value.versions.find(v => v.id === id).version, 1);
+
+  const migrated = await handle({ action: 'seen', seen: { [id]: 1 } });
+  assert.deepEqual(migrated.value.seen, { [id]: 2 }, '老浏览器记录不能覆盖更高版本');
+});

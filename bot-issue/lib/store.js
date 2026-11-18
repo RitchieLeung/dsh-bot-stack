@@ -185,6 +185,12 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       UNIQUE (issueId, dependsOn)
     );
     CREATE INDEX IF NOT EXISTS idx_issue_links_dep ON issue_links (dependsOn);
+    -- 已读版本按事务保存在服务端：换浏览器、域名或登录状态后仍然有效。
+    CREATE TABLE IF NOT EXISTS issue_seen (
+      issueId   TEXT PRIMARY KEY,
+      version   INTEGER NOT NULL,
+      updatedAt INTEGER NOT NULL
+    );
   `);
 
   // Migration: boards created before the issue type/number existed lack the columns.
@@ -215,6 +221,11 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
   // 附件落在库旁边的 attachments/ 目录，库里只存元数据（id/名字/mime/字节数）。
   const filesDir = attachmentsDir || (dbPath === ':memory:' ? null : path.join(dirname(dbPath), 'attachments'));
   const selectAttachment = db.prepare('SELECT * FROM attachments WHERE id = ?');
+  const selectSeen = db.prepare('SELECT issueId, version FROM issue_seen');
+  const upsertSeen = db.prepare(`
+    INSERT INTO issue_seen (issueId, version, updatedAt) VALUES (?, ?, ?)
+    ON CONFLICT(issueId) DO UPDATE SET version = excluded.version, updatedAt = excluded.updatedAt
+    WHERE excluded.version > issue_seen.version`);
   const insertAttachment = db.prepare(
     'INSERT INTO attachments (id, issueId, name, mime, bytes, createdAt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING');
 
@@ -611,6 +622,25 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       .map(row => ({ id: row.id, number: row.number, version: row.version, updatedAt: row.updatedAt }));
   }
 
+  /** 服务端已读版本：{ [issueId]: lastSeenVersion }。 */
+  function seen() {
+    return Object.fromEntries(selectSeen.all().map(row => [row.issueId, row.version]));
+  }
+
+  /** 标记一条事务已读，只前进、不回退，也不修改事务自身的 version。 */
+  function markSeen(id, version) {
+    const issue = requireIssue(id);
+    if (!Number.isSafeInteger(version) || version < 0) throw failure('INVALID_SEEN_VERSION', '已读版本必须是非负整数');
+    upsertSeen.run(issue.id, version, now());
+    return seen();
+  }
+
+  /** 批量迁移浏览器里的旧已读记录；同样只能前进。 */
+  function markSeenMany(entries) {
+    for (const [id, version] of Object.entries(entries || {})) markSeen(id, version);
+    return seen();
+  }
+
   /** The label library, for the picker's chips. */
   function tags() {
     return selectTagLib.all().map(row => row.name);
@@ -686,7 +716,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
 
   return {
     list, get: getFull, create, update, comment, activeDispatch, syncTask, counts,
-    assign, loads, versions,
+    assign, loads, versions, seen, markSeen, markSeenMany,
     addAttachment, getAttachment,
     tags, createTag, deleteTag, link, unlink,
     /** Back-compat: the old name for the label library. */
