@@ -14,10 +14,10 @@
 先 clone 与 release 同 tag 的安装器，再下载对应构建产物：
 
 ```bash
-git clone --branch stack-v0.1.2 https://github.com/RitchieLeung/dsh-bot-stack.git
+git clone --branch stack-v0.1.3 https://github.com/RitchieLeung/dsh-bot-stack.git
 cd dsh-bot-stack
 mkdir -p dist
-gh release download stack-v0.1.2 \
+gh release download stack-v0.1.3 \
   -R RitchieLeung/dsh-bot-stack \
   --dir dist \
   --pattern '*.tgz' --pattern 'manifest.json' --pattern 'SHA256SUMS'

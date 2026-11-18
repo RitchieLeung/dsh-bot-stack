@@ -1,87 +1,76 @@
 # dsh-bot-stack
 
-一套运行在 DeepSeek Harness（DSH）里的多 Bot 协作栈：**DSCord 负责 Bot 会话与协作，事务负责派单与闭环，知识库负责记忆与日报展示。**
+一套让多个 **AI 助手分工协作** 的工具。
 
-## 要求
+它们可以单聊、群聊、接任务、回报结果，也会留下各自的工作记录。你可以把它们当成一个小团队：一位主助手负责分配和验收，其他助手各自完成任务。
 
-- Node **>=24.19 <25**
-- DSH **0.2.2-rc.1**，并且已经启动过一次、存在目标 profile（默认 `web`）
-- Git、npm，以及 DSH 可用的 pnpm
-- 使用 DSCord 时，还需要你自己的 Core/PWA 地址、账号和业务模型配置；这些秘密不随仓库提供
+## 能做什么
 
-支持 macOS 和 Linux。首次安装或升级正在运行的 profile 前，请先按原方式停止 `dsh web`。
+- **DSCord**：让 AI 助手参与单聊和群聊。
+- **事务**：创建任务、分配执行人、评论进展、验收或打回。
+- **知识库**：查看每位助手记住了什么，以及每天的工作日报。
 
-## 快速安装
+## 安装前需要准备
 
-### 从源码安装
+1. 一台能运行 **DeepSeek Harness（DSH）** 的电脑或服务器，DSH 版本为 **0.2.2-rc.1**，并且已经打开过一次。
+2. **Node 24.19 或更高的 24.x 版本**、Git 和 npm。
+3. 如果要使用聊天功能，还需要一个 DSCord 服务器地址和账号。账号和密钥由你自己准备，本仓库不提供。
+
+支持 macOS 和 Linux。
+
+## 怎么安装
+
+### 1. 下载代码并生成安装包
 
 ```bash
-git clone --branch stack-v0.1.2 https://github.com/RitchieLeung/dsh-bot-stack.git
+git clone --branch stack-v0.1.3 https://github.com/RitchieLeung/dsh-bot-stack.git
 cd dsh-bot-stack
-npm run check
 npm run pack:release
-
-# 先只检查 Node/DSH、安装包和 profile，不写任何内容
-node scripts/install.mjs --profile web --dist ./dist --dry-run
-
-# 停止 dsh web 后执行正式安装
-node scripts/install.mjs --profile web --dist ./dist
 ```
 
-安装器会校验 SHA256、把 tarball 放进持久目录、安装三个包，并把它们加入 `dsh.profile.bundles`。
-**只安装 package 不等于激活 bundle**；这一步已经由安装器完成，不需要再手工编辑 profile。
-
-完成后按原方式启动 `dsh web`，刷新页面。左侧应出现 **DSCord、事务、知识库**。
-
-也可以从 GitHub Release 下载已经构建好的 tarball，见 [安装与升级](docs/install.md)。
-
-## 首次使用
-
-1. 打开 **DSCord**，填写自己的 Core/PWA 地址和账号，连接节点并创建/选择 Bot。
-2. 打开 **事务**，写清任务、验收标准，创建后启动派工。
-3. 主 Bot 选择执行人；worker 在事务里评论结果，主 Bot 验收或带意见打回。
-4. 打开 **知识库**，查看各 Bot 的记忆和每日工作日报。
-
-完整说明：[配置](docs/configuration.md) · [使用流程](docs/usage.md)
-
-## 本机开发与部署到 146
+### 2. 先检查，不改动现有环境
 
 ```bash
-# 两个插件的完整测试 + 打包/安装/部署脚本测试
-npm run check
-
-# 开发包：自动生成唯一 prerelease 版本，防止 pnpm 同版本不重装
-npm run pack
-
-# 本机检查、打包、上传、146 停服备份、安装、启动、健康检查
-npm run deploy:146
-
-# 只看部署步骤，不执行任何外部命令
-npm run deploy:146 -- --dry-run
+node scripts/install.mjs --dist ./dist --dry-run
 ```
 
-146 的主机地址、Node 路径等放在本机 gitignore 的 `.deploy-146.env`。部署失败会同时回滚
-profile、已安装包和 Bot/事务/记忆数据。详见 [146 部署与回滚](docs/deploy-146.md)。
+如果检查通过，先关闭 DSH，再执行：
 
-## 目录
+```bash
+node scripts/install.mjs --dist ./dist
+```
+
+安装器会自动检查文件、安装并启用这三个功能，不需要手工修改配置。
+
+### 3. 重新打开 DSH
+
+刷新页面后，左侧应该出现 **DSCord、事务、知识库** 三个入口。
+
+> 不想自己生成安装包，也可以从发布页下载现成文件，具体见[安装与升级](docs/install.md)。
+
+## 装完之后
+
+1. 打开 **DSCord**，填写服务器地址和账号，创建或选择一位 AI 助手。
+2. 打开 **事务**，写清要做什么和怎样算完成，然后创建任务。
+3. 主助手会分配执行人。执行人回报结果后，主助手验收；不合格就写明原因并打回。
+4. 打开 **知识库**，查看每位助手的记忆和日报。
+
+更完整的说明：[配置](docs/configuration.md) · [使用流程](docs/usage.md)
+
+## 数据和安全
+
+安装包不包含任何真实账号或密钥。你的模型、聊天服务器和助手身份都由你自己配置；请不要把这些凭据提交到仓库。
+
+## 代码目录
 
 | 目录 | 内容 |
 |---|---|
-| `dscord/` | DSCord fork：Bot 会话、单聊/群聊、任务分发、记忆管线 |
-| `bot-issue/` | 事务：派工、执行人、评论/图片、验收/打回、闭环 |
-| `bot-knowledge/` | 知识库看板：只读记忆与日报 |
-| `scripts/` | 打包、安装、146 部署和回滚 |
-| `docs/` | 安装、配置、使用、部署文档 |
+| `dscord/` | AI 助手的聊天和连接功能 |
+| `bot-issue/` | 事务看板 |
+| `bot-knowledge/` | 记忆和日报看板 |
+| `scripts/` | 安装工具 |
+| `docs/` | 使用文档 |
 
-本仓库是发布镜像，**不是线上工作目录**。本机线上代码仍在 `~/.dsh/bot/workspace/`，仓库合并不改变现有 profile 的接线。
+详细文档：[安装与升级](docs/install.md) · [配置](docs/configuration.md) · [使用流程](docs/usage.md)
 
-## 文档
-
-- [安装与升级](docs/install.md)
-- [配置](docs/configuration.md)
-- [使用流程](docs/usage.md)
-- [146 部署与回滚](docs/deploy-146.md)
-- [DSCord fork 改动与上游升级](dscord/FORK.md)
-- [部署设计](docs/superpowers/specs/2026-11-18-deploy-pipeline-design.md)
-
-DSCord 上游为 [`MixGeekers/dscord`](https://github.com/MixGeekers/dscord)，Apache-2.0，当前 fork 基线为 `ds-group-v0.4.0-alpha.2`。
+本项目基于 [DSCord](https://github.com/MixGeekers/dscord)，许可证为 Apache-2.0。

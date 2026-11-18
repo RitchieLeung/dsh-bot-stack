@@ -10,14 +10,13 @@ const read = path => readFileSync(join(ROOT, path), 'utf8');
 test('README is an installation and first-use entry point, not only architecture notes', () => {
   const readme = read('README.md');
   for (const expected of [
+    'AI 助手',
     '24.19',
     '0.2.2-rc.1',
+    '怎么安装',
     'npm run pack:release',
     'node scripts/install.mjs',
-    'dsh.profile.bundles',
-    '首次使用',
-    'npm run deploy:146',
-    'docs/deploy-146.md',
+    '装完之后',
     'docs/usage.md',
   ]) {
     assert.ok(readme.includes(expected), `README 缺少：${expected}`);
@@ -25,6 +24,17 @@ test('README is an installation and first-use entry point, not only architecture
   assert.ok(!readme.includes('/Users/ritchie_leung'));
   assert.ok(!readme.includes('146.56.202.108'));
   assert.ok(!readme.includes('dsh-plugin-bot-ebook'));
+});
+
+test('README avoids maintainer-only deployment jargon and internal topology', () => {
+  const readme = read('README.md');
+  for (const jargon of [
+    'deploy:146', '146 部署', 'dsh.profile.bundles', 'prerelease', 'tarball',
+    'HMR', 'Cordis', 'profile', 'systemd', 'pnpm', 'worker', 'Core/PWA',
+    '~/.dsh/bot/workspace', '发布镜像',
+  ]) {
+    assert.ok(!readme.includes(jargon), `公开首页不应出现术语/内部信息：${jargon}`);
+  }
 });
 
 test('installation, configuration, usage, and rollback documents exist', () => {
