@@ -99,4 +99,44 @@ test('remote script pins safe deployment and rollback behavior', () => {
     assert.ok(source.includes(expected), `缺少部署/回滚要件：${expected}`);
   }
   assert.ok(source.indexOf('systemctl stop') < source.indexOf('backup_paths "$profileDir"'), '必须先停服务再备份');
+  assert.ok(source.lastIndexOf('trap - ERR') < source.indexOf('ln -sfn'), '健康检查后必须先解除回滚 trap，再做 current/cleanup');
+  assert.ok(source.includes("grep -v '/current/$'"), 'release 保留数不能把 current symlink 算进去');
+  assert.ok(!source.includes('/home/liangliqiang'), '公共脚本不能写死作者用户名');
+});
+
+test('unsafe dataHome is rejected before any rm or tar invocation', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'unsafe-home-'));
+  const profile = join(dir, 'profile');
+  const backup = join(dir, 'backup');
+  mkdirSync(profile, { recursive: true });
+  mkdirSync(backup);
+  writeFileSync(join(backup, 'data.tgz'), 'not-used');
+  const log = join(dir, 'calls');
+  const result = spawnSync('bash', ['-c', `
+    source "$1"
+    rm() { echo rm >> "$4"; }
+    tar() { echo tar >> "$4"; }
+    set +e
+    restore_paths "$2" / "$3"
+  `, '_', REMOTE, profile, backup, log], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0, 'DSH_HOME=/ 必须被拒绝');
+  assert.equal(existsSync(log), false, '危险路径下不能执行 rm/tar');
+});
+
+test('backup accepts a fresh host and restore verifies the archive before deleting data', () => {
+  const root = mkdtempSync(join(tmpdir(), 'fresh-backup-'));
+  const profile = join(root, 'profile');
+  const data = join(root, 'data');
+  const backup = join(root, 'backup');
+  mkdirSync(profile, { recursive: true });
+  mkdirSync(data, { recursive: true });
+
+  execFileSync('bash', ['-c', 'source "$1"; backup_paths "$2" "$3" "$4"', '_', REMOTE, profile, data, backup]);
+  assert.ok(existsSync(join(backup, 'data.tgz')), '没有既有 bot/dscord 数据也应能备份');
+
+  writeFileSync(join(data, 'keep.txt'), 'keep');
+  writeFileSync(join(backup, 'data.tgz'), 'corrupt');
+  const result = spawnSync('bash', ['-c', 'source "$1"; restore_paths "$2" "$3" "$4"', '_', REMOTE, profile, data, backup], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0, '损坏归档应拒绝恢复');
+  assert.equal(readFileSync(join(data, 'keep.txt'), 'utf8'), 'keep', '验证归档前不能先删数据');
 });

@@ -7,7 +7,7 @@ import {
   copyFileSync, writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EXPECTED_DSH = '0.2.2-rc.1';
@@ -95,6 +95,9 @@ function loadVerifiedPackages(dist) {
   for (const name of EXPECTED_PACKAGES) {
     const item = byName.get(name);
     if (!item) throw new Error(`manifest 缺少 ${name}`);
+    if (typeof item.filename !== 'string' || basename(item.filename) !== item.filename || !/^[A-Za-z0-9._-]+$/.test(item.filename)) {
+      throw new Error(`manifest 含非法 filename（不允许路径穿越）：${item.filename}`);
+    }
     const file = join(dist, item.filename);
     if (!existsSync(file)) throw new Error(`缺少安装包：${file}`);
     const actual = sha256(file);
@@ -153,34 +156,43 @@ function activateBundles(profileDir) {
   writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function approveIssueSkills(profileDir, dshBin, pnpmBin) {
-  const bin = pnpmBin || join(dirname(dshBin), 'pnpm');
-  const list = spawnSync(bin, ['permissions', 'list'], {
-    cwd: profileDir,
-    env: dshEnv(dshBin),
-    encoding: 'utf8',
-  });
-  if (list.error) throw list.error;
-  if (list.status !== 0) throw new Error(`pnpm permissions list 失败：${list.stderr || list.stdout}`);
-  const output = `${list.stdout || ''}\n${list.stderr || ''}`;
-  const awaiting = output.split(/Awaiting approval:/i)[1]?.split(/Run "pnpm approve"/i)[0] || '';
-  const pendingLines = awaiting.split('\n').map(line => line.trim()).filter(Boolean);
-  if (pendingLines.length === 0) return;
-  const onlyIssueSkills = pendingLines.every(line => /^dsh-plugin-bot-issue(?:\s+\(tarball\))?(?:\s+\[dsh-plugin-bot-issue@[^\]]+\])?\s+skills$/.test(line));
-  if (!onlyIssueSkills) {
-    throw new Error(`pnpm 待批准列表含其他包或权限，拒绝 blanket approve：${pendingLines.join('；')}`);
-  }
+function issueSelectorFromLockfile(profileDir, filename) {
+  const lockFile = join(profileDir, 'pnpm-lock.yaml');
+  if (!existsSync(lockFile)) throw new Error(`缺少 ${lockFile}，无法确定事务 tarball selector`);
+  const line = readFileSync(lockFile, 'utf8').split('\n').find(candidate =>
+    /^\s*dsh-plugin-bot-issue@file:/.test(candidate) && candidate.includes(`/${filename}:`),
+  );
+  if (!line) throw new Error(`pnpm-lock.yaml 里找不到事务包 ${filename} 的 selector`);
+  return line.trim().replace(/:$/, '');
+}
 
-  // pnpm 12 的具名 approve 不会清掉 tarball 形态的待批准项。只有确认列表里
-  // 全部是本仓库事务 skill 后，才允许 --all；有任何其他项都在上面拒绝。
-  console.log('待批准项仅为事务包 issue-workflow skill，批准该 tarball skill');
-  const approved = spawnSync(bin, ['approve', '--all', '--yes'], {
+function approveIssueSkills(profileDir, dshBin, pnpmBin, filename) {
+  const bin = pnpmBin || join(dirname(dshBin), 'pnpm');
+  // 相对路径的规范化层级由 pnpm 自己决定，必须从 lockfile 读，不能手工拼。
+  const selector = issueSelectorFromLockfile(profileDir, filename);
+  console.log(`仅批准事务 tarball 的 issue-workflow skill：${selector}`);
+  const approved = spawnSync(bin, ['approve', selector, '--yes'], {
     cwd: profileDir,
     env: dshEnv(dshBin),
     stdio: 'inherit',
   });
   if (approved.error) throw approved.error;
-  if (approved.status !== 0) throw new Error(`pnpm approve dsh-plugin-bot-issue 失败（exit ${approved.status}）`);
+  if (approved.status !== 0) throw new Error(`pnpm approve ${selector} 失败（exit ${approved.status}）`);
+
+  // 权限操作后必须复核：其他包的待批准项保持原样，当前 selector 不能仍待批准。
+  const verified = spawnSync(bin, ['permissions', 'list'], {
+    cwd: profileDir,
+    env: dshEnv(dshBin),
+    encoding: 'utf8',
+  });
+  if (verified.error) throw verified.error;
+  if (verified.status !== 0) throw new Error(`pnpm permissions list 复核失败：${verified.stderr || verified.stdout}`);
+  const output = `${verified.stdout || ''}\n${verified.stderr || ''}`;
+  const awaiting = output.split(/Awaiting approval:/i)[1]?.split(/Run "pnpm approve"/i)[0] || '';
+  const stillPending = awaiting.split('\n').some(line =>
+    line.includes(selector) || (line.includes('dsh-plugin-bot-issue') && !line.includes('[')),
+  );
+  if (stillPending) throw new Error(`事务 skill 批准未生效：${selector}`);
 }
 
 function install(options) {
@@ -224,7 +236,8 @@ function install(options) {
       if (result.status !== 0) throw new Error(`dsh plugin add ${item.name} 失败（exit ${result.status}）`);
     }
     activateBundles(profileDir);
-    approveIssueSkills(profileDir, dshBin, options.pnpmBin);
+    const issue = packages.find(item => item.name === 'dsh-plugin-bot-issue');
+    approveIssueSkills(profileDir, dshBin, options.pnpmBin, issue.filename);
   } catch (error) {
     try {
       restore(profileDir, backupRoot, saved);

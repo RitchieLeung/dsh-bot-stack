@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -60,15 +61,25 @@ manifest.dependencies[name] = 'file:' + file;
 writeFileSync(join(profile, 'package.json'), JSON.stringify(manifest, null, 2) + '\\n');
 mkdirSync(join(profile, 'node_modules', name), { recursive: true });
 writeFileSync(join(profile, 'node_modules', name, 'package.json'), JSON.stringify({ name, version: 'new' }));
+if (name === 'dsh-plugin-bot-issue') writeFileSync(join(profile, 'pnpm-lock.yaml'), '  ' + name + '@file:' + file + ':\\n');
 `);
   chmodSync(dshBin, 0o755);
 
   const pnpmBin = join(root, 'pnpm');
   writeFileSync(pnpmBin, `#!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 const args = process.argv.slice(2);
 if (process.env.FAKE_DSH_LOG) appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify({ pnpm: args }) + '\\n');
-if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball) [dsh-plugin-bot-issue@file:../../bot/packages/build/pkg.tgz]  skills' + (process.env.FAKE_PNPM_OTHER_PENDING ? '\\n  other-package (tarball)  scripts' : ''));
+if (args[0] === 'approve') writeFileSync(process.env.FAKE_PNPM_STATE, 'approved');
+if (args[0] === 'permissions' && args[1] === 'list') {
+  const approved = existsSync(process.env.FAKE_PNPM_STATE);
+  const lock = readFileSync(join(process.env.FAKE_PROFILE_DIR, 'pnpm-lock.yaml'), 'utf8');
+  const selector = lock.trim().replace(/:$/, '');
+  if (approved) console.log('Granted:\\n  ' + selector + '  skills');
+  else console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball) [' + selector + ']  skills');
+  if (process.env.FAKE_PNPM_OTHER_PENDING) console.log('Awaiting approval:\\n  other-package (tarball)  scripts');
+}
 `);
   chmodSync(pnpmBin, 0o755);
 
@@ -81,6 +92,7 @@ if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting appro
     packagesDir: join(root, 'persistent-packages'),
     backupRoot: join(root, 'backup'),
     log: join(root, 'dsh.log'),
+    pnpmState: join(root, 'pnpm-approved'),
     originalPackageText: readFileSync(join(profileDir, 'package.json'), 'utf8'),
   };
 }
@@ -102,6 +114,7 @@ function runInstall(ctx, extra = [], env = {}) {
       HOME: ctx.home,
       FAKE_PROFILE_DIR: ctx.profileDir,
       FAKE_DSH_LOG: ctx.log,
+      FAKE_PNPM_STATE: ctx.pnpmState,
       ...env,
     },
   });
@@ -130,6 +143,23 @@ test('a modified tarball is rejected before any write or dsh call', () => {
   assert.equal(existsSync(ctx.log), false);
 });
 
+test('manifest filenames cannot escape dist or the persistent package directory', () => {
+  const ctx = workspace();
+  const manifestPath = join(ctx.dist, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const item = manifest.packages[0];
+  const bytes = readFileSync(join(ctx.dist, item.filename));
+  writeFileSync(join(ctx.root, 'escape.tgz'), bytes);
+  item.filename = '../escape.tgz';
+  item.sha256 = createHash('sha256').update(bytes).digest('hex');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const result = runInstall(ctx);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /filename|文件名|路径/);
+  assert.equal(existsSync(ctx.packagesDir), false);
+});
+
 test('install uses persistent tarballs, activates bundles once, and keeps backups', () => {
   const ctx = workspace();
   const first = runInstall(ctx);
@@ -146,7 +176,9 @@ test('install uses persistent tarballs, activates bundles once, and keeps backup
   assert.equal(existsSync(join(ctx.backupRoot, 'profile', 'package.json')), true);
   assert.equal(existsSync(join(ctx.backupRoot, 'installed', 'dscord', 'package.json')), true);
   const calls = readFileSync(ctx.log, 'utf8');
-  assert.ok(calls.includes('"pnpm":["approve","--all","--yes"]'), '确认待批准列表只有事务 skill 后，必须批准 tarball 形态');
+  assert.ok(!calls.includes('"--all"'), '只能批准 lockfile 里的事务 tarball selector，不能 blanket approve');
+  assert.ok(calls.includes('"approve","dsh-plugin-bot-issue@file:'), '必须使用 lockfile 规范化 selector');
+  assert.equal(existsSync(ctx.pnpmState), true, '批准后要复核状态');
 
   const second = runInstall(ctx);
   assert.equal(second.status, 0, second.stderr);
@@ -170,14 +202,14 @@ test('dsh is executed with its own Node bin directory first in PATH', () => {
   assert.equal(result.status, 0, `不能用 SSH 默认的旧 Node 启动 dsh：${result.stderr}`);
 });
 
-test('refuses blanket approval when another package or permission is pending', () => {
+test('another pending package is left untouched while the exact issue selector is approved', () => {
   const ctx = workspace();
   const result = runInstall(ctx, [], { FAKE_PNPM_OTHER_PENDING: '1' });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /其他包|拒绝/);
-  const calls = existsSync(ctx.log) ? readFileSync(ctx.log, 'utf8') : '';
-  assert.ok(!calls.includes('"pnpm":["approve","--all","--yes"]'));
-  assert.equal(readFileSync(join(ctx.profileDir, 'package.json'), 'utf8'), ctx.originalPackageText);
+  assert.equal(result.status, 0, result.stderr);
+  const calls = readFileSync(ctx.log, 'utf8');
+  assert.ok(!calls.includes('"--all"'));
+  assert.ok(!calls.includes('other-package'));
+  assert.equal(existsSync(ctx.pnpmState), true);
 });
 
 test('unsupported DSH and Node versions are rejected', async () => {

@@ -13,7 +13,9 @@ backup_paths() {
       cp -a "$profileDir/node_modules/$name" "$backupDir/installed/$name"
     fi
   done
-  [ -n "$dataHome" ] && [ "$dataHome" != "/" ] && [ "$dataHome" != "$HOME" ]
+  [ -n "$dataHome" ] && [ "$dataHome" != "/" ] && [ "$dataHome" != "$HOME" ] || return 1
+  # 新机器可能还没有数据目录；创建空目录后备份，恢复时也有明确目标。
+  mkdir -p "$dataHome/bot" "$dataHome/dscord"
   tar -C "$dataHome" -czf "$backupDir/data.tgz" bot dscord
 }
 
@@ -29,7 +31,9 @@ restore_paths() {
       cp -a "$backupDir/installed/$name" "$profileDir/node_modules/$name"
     fi
   done
-  [ -n "$dataHome" ] && [ "$dataHome" != "/" ] && [ "$dataHome" != "$HOME" ]
+  [ -n "$dataHome" ] && [ "$dataHome" != "/" ] && [ "$dataHome" != "$HOME" ] || return 1
+  # 先证明归档可读，再删除当前数据；损坏归档不能把旧数据也带走。
+  tar -tzf "$backupDir/data.tgz" >/dev/null || return 1
   rm -rf "$dataHome/bot" "$dataHome/dscord"
   tar -C "$dataHome" -xzf "$backupDir/data.tgz"
 }
@@ -156,10 +160,12 @@ main() {
     return 1
   fi
 
+  # 健康已经确认：后续 current/cleanup/echo 失败不再把新代码和数据回滚掉。
+  trap - ERR
   ln -sfn "$releaseDir" "$remoteRoot/releases/current"
 
-  # 只清理确认健康后的旧 release，保留 5 个；路径必须仍位于 releases 下。
-  ls -1dt "$remoteRoot/releases"/*/ 2>/dev/null | tail -n +6 | while read -r old; do
+  # 只清理确认健康后的旧 release，保留 5 个实体目录；current symlink 不占名额。
+  ls -1dt "$remoteRoot/releases"/*/ 2>/dev/null | grep -v '/current/$' | tail -n +6 | while read -r old; do
     resolved="$(realpath "$old")"
     [ "$resolved" = "$releaseDir" ] && continue
     case "$resolved" in
@@ -169,7 +175,6 @@ main() {
 
   echo "146 部署健康：build $buildId，旧 pid $oldPid，新 pid $(sudo -n systemctl show "$service" -p MainPID --value)"
   echo "备份保留在 $backupDir"
-  trap - ERR
 }
 
 # 测试可以 source 本文件，只调用 backup_paths / restore_paths，不启动主流程。

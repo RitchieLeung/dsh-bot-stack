@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Build installable tarballs without changing the source package versions. */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +47,8 @@ function gitHead(root) {
 }
 
 function stamp() {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '.');
+  const time = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '.');
+  return `${time}.${randomUUID().slice(0, 8)}`;
 }
 
 function safeBuildId(value) {

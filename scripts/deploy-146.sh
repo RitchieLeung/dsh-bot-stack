@@ -31,8 +31,8 @@ if [ -f "$ROOT/.deploy-146.env" ]; then
   set +a
 fi
 HOST="${DEPLOY_HOST:-146}"
-REMOTE_ROOT="${REMOTE_ROOT:-/home/liangliqiang/dsh-bot-stack}"
-NODE_HOME="${DSH_NODE_HOME:-/home/liangliqiang/.nvm/versions/node/v24.22.2}"
+REMOTE_ROOT="${REMOTE_ROOT:?请在 .deploy-146.env 或环境变量中设置 REMOTE_ROOT}"
+NODE_HOME="${DSH_NODE_HOME:?请在 .deploy-146.env 或环境变量中设置 DSH_NODE_HOME}"
 SERVICE="${DSH_SERVICE:-dsh-web.service}"
 
 cd "$ROOT"

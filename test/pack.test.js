@@ -28,7 +28,8 @@ function fixtureRoot() {
 }
 
 function pack(root, buildId, release = false) {
-  const args = [PACK, '--root', root, '--out', 'dist', '--build-id', buildId];
+  const args = [PACK, '--root', root, '--out', 'dist'];
+  if (buildId !== undefined) args.push('--build-id', buildId);
   if (release) args.push('--release');
   execFileSync(process.execPath, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   return JSON.parse(readFileSync(join(root, 'dist', 'manifest.json'), 'utf8'));
@@ -57,6 +58,14 @@ test('release pack contains all three packages with source versions and valid SH
   }
   const sums = readFileSync(join(root, 'dist', 'SHA256SUMS'), 'utf8');
   for (const item of manifest.packages) assert.ok(sums.includes(`${item.sha256}  ${item.filename}`));
+});
+
+test('default development build ids are unique even at the same HEAD', () => {
+  const root = fixtureRoot();
+  const first = pack(root, undefined);
+  const second = pack(root, undefined);
+  assert.notEqual(first.stack.buildId, second.stack.buildId);
+  assert.notEqual(first.packages[0].version, second.packages[0].version);
 });
 
 test('development packs have unique versions and pnpm actually reinstalls them', () => {
