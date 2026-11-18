@@ -291,3 +291,87 @@ test('tool schemas only use single type strings (dsh rejects type arrays like [\
     walk(tool.output?.schema, 'output.schema', tool.name);
   }
 });
+
+// ── 事务图片（docs/2026-11-18-issue-images-design.md）────────────────────────
+
+function pngFile(bytes = 8) {
+  const dir = mkdtempSync(join(tmpdir(), 'img-'));
+  const file = join(dir, 'shot.png');
+  writeFileSync(file, Buffer.alloc(bytes, 0x89));
+  return file;
+}
+
+function fakeAttachmentStore() {
+  const added = [];
+  return {
+    added,
+    store: () => ({
+      addAttachment(attrs) {
+        added.push(attrs);
+        const id = 'abc123def4567890';
+        return { id, url: `/api/bot-issue?attachment=${id}`, name: attrs.name, mime: attrs.mime, bytes: 8 };
+      },
+    }),
+  };
+}
+
+test('imageMimeFor maps image extensions and rejects everything else', () => {
+  assert.equal(host.imageMimeFor('/tmp/a.PNG'), 'image/png');
+  assert.equal(host.imageMimeFor('/tmp/a.jpg'), 'image/jpeg');
+  assert.equal(host.imageMimeFor('/tmp/a.jpeg'), 'image/jpeg');
+  assert.equal(host.imageMimeFor('/tmp/a.gif'), 'image/gif');
+  assert.equal(host.imageMimeFor('/tmp/a.webp'), 'image/webp');
+  assert.equal(host.imageMimeFor('/tmp/a.svg'), 'image/svg+xml');
+  assert.equal(host.imageMimeFor('/tmp/a.txt'), null);
+  assert.equal(host.imageMimeFor('/tmp/a'), null);
+});
+
+test('attachImages stores the file once and returns one markdown line per image', () => {
+  const { added, store } = fakeAttachmentStore();
+  const png = pngFile();
+  const result = host.attachImages({ store, issueId: 'issue-1', images: [png, png] });
+
+  assert.equal(added.length, 2, '同一张图传两次会各调用一次 addAttachment（去重是 store 的事）');
+  assert.equal(added[0].issueId, 'issue-1');
+  assert.equal(added[0].name, 'shot.png');
+  assert.equal(added[0].mime, 'image/png');
+  assert.equal(Buffer.from(added[0].data, 'base64').length, 8);
+
+  assert.equal(result.attachments.length, 2);
+  const lines = result.markdown.split('\n');
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0], '![shot.png](/api/bot-issue?attachment=abc123def4567890)');
+});
+
+test('attachImages reports why a path cannot be used', () => {
+  const { store } = fakeAttachmentStore();
+
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: ['shot.png'] }),
+    err => err.code === 'RELATIVE_PATH' && /绝对路径/.test(err.message),
+  );
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: ['/tmp/notes.txt'] }),
+    err => err.code === 'UNSUPPORTED_IMAGE' && /png/.test(err.message),
+  );
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: [join(tmpdir(), 'definitely-missing.png')] }),
+    err => err.code === 'IMAGE_NOT_FOUND',
+  );
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: [pngFile(0)] }),
+    err => err.code === 'EMPTY_IMAGE',
+  );
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: Array.from({ length: 9 }, () => pngFile()) }),
+    err => err.code === 'TOO_MANY_IMAGES' && /8/.test(err.message),
+  );
+});
+
+test('attachImages with no images is a no-op', () => {
+  const { added, store } = fakeAttachmentStore();
+  const result = host.attachImages({ store, issueId: 'issue-1', images: [] });
+  assert.equal(added.length, 0);
+  assert.deepEqual(result, { markdown: '', attachments: [] });
+  assert.deepEqual(host.attachImages({ store, issueId: 'issue-1' }), { markdown: '', attachments: [] });
+});
