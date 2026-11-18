@@ -44,13 +44,14 @@ fi
 npm run check
 npm run pack
 
-BUILD_ID="$(node -e "const m=require('./dist/manifest.json');process.stdout.write(m.stack.buildId)")"
-HEAD="$(node -e "const m=require('./dist/manifest.json');process.stdout.write(m.stack.head)")"
+DIST_DIR="${DIST_DIR:-$ROOT/dist}"
+BUILD_ID="$(node -e "const m=require(process.argv[1]);process.stdout.write(m.stack.buildId)" "$DIST_DIR/manifest.json")"
+HEAD="$(node -e "const m=require(process.argv[1]);process.stdout.write(m.stack.head)" "$DIST_DIR/manifest.json")"
 RELEASE_DIR="$REMOTE_ROOT/releases/$BUILD_ID"
 
 echo "部署 ${HEAD}（build ${BUILD_ID}）到 ${HOST}"
 ssh "$HOST" "mkdir -p '$RELEASE_DIR/scripts'"
-rsync -az --delete "$ROOT/dist/" "$HOST:$RELEASE_DIR/dist/"
+rsync -az --delete "$DIST_DIR/" "$HOST:$RELEASE_DIR/dist/"
 rsync -az "$ROOT/scripts/install.mjs" "$ROOT/scripts/remote-deploy.sh" "$HOST:$RELEASE_DIR/scripts/"
 
 ssh "$HOST" "REMOTE_ROOT='$REMOTE_ROOT' DSH_NODE_HOME='$NODE_HOME' DSH_SERVICE='$SERVICE' bash '$RELEASE_DIR/scripts/remote-deploy.sh' --release-dir '$RELEASE_DIR'"

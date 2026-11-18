@@ -41,10 +41,13 @@ test('deployment message expands HEAD safely before Chinese punctuation on Bash 
     writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n');
     execFileSync('chmod', ['+x', join(bin, name)]);
   }
+  const dist = join(dir, 'dist');
+  mkdirSync(dist);
+  writeFileSync(join(dist, 'manifest.json'), JSON.stringify({ stack: { head: 'test-head', buildId: 'test-build' } }));
   const result = spawnSync('bash', [LOCAL, '--allow-dirty'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DIST_DIR: dist },
   });
   assert.equal(result.status, 0, `不应在部署日志处失败：${result.stderr}`);
   assert.match(result.stdout, /部署 .*（build .*）到/);
