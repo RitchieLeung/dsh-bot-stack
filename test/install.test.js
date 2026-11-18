@@ -44,6 +44,9 @@ function workspace() {
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 const args = process.argv.slice(2);
+if (process.env.FAKE_DSH_REQUIRE_OWN_PATH && process.env.PATH.split(':')[0] !== dirname(process.argv[1])) {
+  console.error('dsh 被错误的 PATH/node 调用'); process.exit(1);
+}
 if (args.includes('--version')) { console.log(process.env.FAKE_DSH_VERSION || '0.2.2-rc.1'); process.exit(0); }
 if (args[0] !== 'plugin') process.exit(2);
 const file = args.find(arg => arg.endsWith('.tgz'));
@@ -148,6 +151,12 @@ test('failure on the second package restores profile and installed package dirs'
   assert.equal(readFileSync(join(ctx.profileDir, 'pnpm-lock.yaml'), 'utf8'), 'lockfileVersion: 1\n');
   assert.equal(readFileSync(join(ctx.profileDir, 'node_modules', 'dscord', 'package.json'), 'utf8'), '{"name":"dscord","version":"old"}\n');
   assert.equal(existsSync(join(ctx.profileDir, 'node_modules', 'dsh-plugin-bot-issue')), false);
+});
+
+test('dsh is executed with its own Node bin directory first in PATH', () => {
+  const ctx = workspace();
+  const result = runInstall(ctx, ['--dry-run'], { FAKE_DSH_REQUIRE_OWN_PATH: '1' });
+  assert.equal(result.status, 0, `不能用 SSH 默认的旧 Node 启动 dsh：${result.stderr}`);
 });
 
 test('unsupported DSH and Node versions are rejected', async () => {

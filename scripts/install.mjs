@@ -41,13 +41,24 @@ function parseArgs(argv) {
   return result;
 }
 
+function dshEnv(dshBin) {
+  const binDir = dirname(dshBin);
+  return {
+    ...process.env,
+    // dsh 的 shebang 是 /usr/bin/env node；SSH 默认 PATH 可能指向系统旧 Node。
+    PATH: binDir === '.' ? process.env.PATH : `${binDir}:${process.env.PATH || ''}`,
+  };
+}
+
 function detectDshVersion(dshBin) {
-  const result = spawnSync(dshBin, ['--version'], { encoding: 'utf8' });
-  const output = `${result.stdout || ''}\n${result.stderr || ''}`;
-  const match = output.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/);
-  if (match) {
-    assertDshVersion(match[0]);
-    return;
+  const result = spawnSync(dshBin, ['--version'], { encoding: 'utf8', env: dshEnv(dshBin) });
+  if (result.status === 0) {
+    const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const match = output.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/);
+    if (match) {
+      assertDshVersion(match[0]);
+      return;
+    }
   }
 
   // 某些安装方式下 dsh --version 没有输出；从真实安装路径读 package.json。
@@ -176,7 +187,7 @@ function install(options) {
       console.log(`安装 ${item.name}@${item.version}`);
       const result = spawnSync(dshBin, ['plugin', '--profile', options.profile, 'add', target, '--ignore-scripts'], {
         stdio: 'inherit',
-        env: process.env,
+        env: dshEnv(dshBin),
       });
       if (result.error) throw result.error;
       if (result.status !== 0) throw new Error(`dsh plugin add ${item.name} 失败（exit ${result.status}）`);
