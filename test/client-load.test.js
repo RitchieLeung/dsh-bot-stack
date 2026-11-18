@@ -136,3 +136,10 @@ test('client.js 声明手机断点与 Bot 列表抽屉', () => {
   assert.match(SOURCE, /bk-scrim/, '抽屉遮罩');
   assert.match(SOURCE, /bk-nav-btn/, '☰ 开关按钮');
 });
+
+test('client.js 声明美化后的 Bot 头像、分段标签与彩色徽标', () => {
+  assert.match(SOURCE, /bk-avatar/, 'Bot 头像');
+  assert.match(SOURCE, /bk-tabs/, '分段标签容器');
+  assert.match(SOURCE, /bk-side-count/, 'Bot 计数徽标');
+  assert.match(SOURCE, /CATEGORY_TONE/, '分类→颜色映射');
+});
