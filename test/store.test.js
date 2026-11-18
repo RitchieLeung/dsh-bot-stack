@@ -45,7 +45,7 @@ test('get returns comments and dispatches arrays', () => {
 test('state machine rejects illegal transitions', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  assert.throws(() => store.update(issue.id, { status: 'done' }), /不能从「待处理」直接到「已闭环」/);
+  assert.throws(() => store.update(issue.id, { status: 'done', result: '验收通过' }), /不能从「待处理」直接到「已闭环」/);
   const moved = store.update(issue.id, { status: 'discussing' });
   assert.equal(moved.status, 'discussing');
   // a status change is recorded in the timeline
@@ -361,7 +361,7 @@ test('deps: done is blocked while a dependency is unfinished', () => {
   store.link(a.id, b.id);
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.throws(() => store.update(a.id, { status: 'done' }, { kind: 'user' }), err => {
+  assert.throws(() => store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }), err => {
     assert.equal(err.code, 'BLOCKED_BY_DEPS');
     assert.match(err.message, /#2「B」/);
     return true;
@@ -369,8 +369,8 @@ test('deps: done is blocked while a dependency is unfinished', () => {
   // B closes its loop, then A can complete.
   store.update(b.id, { status: 'dispatched' });
   store.update(b.id, { status: 'in_review' });
-  store.update(b.id, { status: 'done' }, { kind: 'user' });
-  assert.equal(store.update(a.id, { status: 'done' }, { kind: 'user' }).status, 'done');
+  store.update(b.id, { status: 'done', result: '验收通过' }, { kind: 'user' });
+  assert.equal(store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }).status, 'done');
   store.close();
 });
 
@@ -382,7 +382,7 @@ test('deps: a cancelled dependency still blocks completion (not a back door)', (
   store.update(b.id, { status: 'cancelled' });
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.throws(() => store.update(a.id, { status: 'done' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_DEPS');
+  assert.throws(() => store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_DEPS');
   store.close();
 });
 
@@ -396,7 +396,7 @@ test('deps: unlink frees the issue and list carries depsOpen', () => {
   assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 0);
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  assert.equal(store.update(a.id, { status: 'done' }, { kind: 'user' }).status, 'done');
+  assert.equal(store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }).status, 'done');
   store.close();
 });
 
@@ -406,7 +406,7 @@ test('deps: a closed issue cannot gain an unfinished prerequisite', () => {
   const b = store.create({ title: 'B' });
   store.update(a.id, { status: 'dispatched' });
   store.update(a.id, { status: 'in_review' });
-  store.update(a.id, { status: 'done' }, { kind: 'user' });
+  store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' });
   assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
   // a finished prerequisite is fine
   store.update(b.id, { status: 'cancelled' });
@@ -488,7 +488,7 @@ test('loads 只统计进行中/待验收的指派事务', () => {
   store.assign(c.id, { sessionId: 's-2', name: '玉清' }, { kind: 'user' });
   store.update(c.id, { status: 'dispatched' }, { kind: 'user' });
   store.update(c.id, { status: 'in_review' }, { kind: 'user' });
-  store.update(c.id, { status: 'done' }, { kind: 'user' }); // 已闭环不算
+  store.update(c.id, { status: 'done', result: '验收通过' }, { kind: 'user' }); // 已闭环不算
   // d 无 assignee，不算
   assert.deepEqual(store.loads(), { 's-1': 2 });
   store.close();
@@ -529,8 +529,8 @@ test('in_review→dispatched 打回重做，必须带意见', () => {
 
 test('验收通过（in_review→done）只有主 Bot 或人能做', () => {
   const { store, id } = toInReview();
-  assert.throws(() => store.update(id, { status: 'done' }, { kind: 'agent', name: '伟峰', isMain: false }), err => err.code === 'FORBIDDEN_TRANSITION');
-  const done = store.update(id, { status: 'done' }, { kind: 'agent', name: '鲸鱼', isMain: true });
+  assert.throws(() => store.update(id, { status: 'done', result: '验收通过' }, { kind: 'agent', name: '伟峰', isMain: false }), err => err.code === 'FORBIDDEN_TRANSITION');
+  const done = store.update(id, { status: 'done', result: '验收通过' }, { kind: 'agent', name: '鲸鱼', isMain: true });
   assert.equal(done.status, 'done');
   store.close();
 });
@@ -549,6 +549,46 @@ test('worker 可把自己那单 进行中→待验收（交结果）', () => {
   store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
   const reported = store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
   assert.equal(reported.status, 'in_review');
+  store.close();
+});
+
+// ---- 验收意见 + 父子闭环门禁 ----
+
+test('验收通过（done）必须写验收意见 result', () => {
+  const { store, id } = toInReview();
+  assert.throws(() => store.update(id, { status: 'done' }, { kind: 'user' }), err => err.code === 'RESULT_REQUIRED');
+  const done = store.update(id, { status: 'done', result: '已验证产出' }, { kind: 'user' });
+  assert.equal(done.status, 'done');
+  assert.equal(store.get(id).result, '已验证产出');
+  store.close();
+});
+
+test('父事务有未闭环子事务时不能验收通过（BLOCKED_BY_CHILDREN）', () => {
+  const store = fresh();
+  const parent = store.create({ title: '父' });
+  store.update(parent.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(parent.id, { status: 'in_review' }, { kind: 'user' });
+  const child = store.create({ title: '子', parentId: parent.id });
+  // 子事务还 open，父不能 done
+  assert.throws(() => store.update(parent.id, { status: 'done', result: '验收' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_CHILDREN');
+  // 子事务闭环后，父可验收
+  store.update(child.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(child.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(child.id, { status: 'done', result: '子完成' }, { kind: 'user' });
+  const done = store.update(parent.id, { status: 'done', result: '父完成' }, { kind: 'user' });
+  assert.equal(done.status, 'done');
+  store.close();
+});
+
+test('重开（done→open）后清掉旧的 result', () => {
+  const store = fresh();
+  const issue = store.create({ title: 'X' });
+  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(issue.id, { status: 'done', result: '已验收' }, { kind: 'user' });
+  assert.equal(store.get(issue.id).result, '已验收');
+  store.update(issue.id, { status: 'open' }, { kind: 'user' });
+  assert.equal(store.get(issue.id).result, null);
   store.close();
 });
 
