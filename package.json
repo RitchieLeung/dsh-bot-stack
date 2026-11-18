@@ -1,0 +1,17 @@
+{
+  "name": "dsh-bot-stack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSCord、事务和知识库的安装、检查与 146 部署管道",
+  "engines": {
+    "node": ">=24.19.0 <25"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "npm --prefix bot-issue run check && npm --prefix bot-knowledge run check && node --test test/*.test.js",
+    "pack": "node scripts/pack.mjs",
+    "pack:release": "node scripts/pack.mjs --release",
+    "deploy:146": "bash scripts/deploy-146.sh"
+  }
+}
