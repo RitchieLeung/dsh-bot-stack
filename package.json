@@ -1,6 +1,6 @@
 {
   "name": "dsh-bot-stack",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "DSCord、事务和知识库的安装、检查与 146 部署管道",

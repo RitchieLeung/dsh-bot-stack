@@ -16,7 +16,7 @@
 ### 从源码安装
 
 ```bash
-git clone --branch stack-v0.1.1 https://github.com/RitchieLeung/dsh-bot-stack.git
+git clone --branch stack-v0.1.2 https://github.com/RitchieLeung/dsh-bot-stack.git
 cd dsh-bot-stack
 npm run check
 npm run pack:release
