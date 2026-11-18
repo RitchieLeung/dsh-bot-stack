@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import * as host from '../lib/host.js';
 
 function makeState(...bots) {
@@ -453,4 +453,51 @@ test('issue_update with images only appends to the existing body', async () => {
   got = await get.execute({ id: created.id }, exec);
   assert.equal((got.body.match(/!\[shot\.png\]/g) || []).length, 2);
   assert.match(got.body, /原始正文/);
+});
+
+test('issue_get stages comment images and returns a readable local path', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const stagingDir = join(mkdtempSync(join(tmpdir(), 'stage-')), 'issue-attachments');
+  const { ctx, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, stagingDir, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const create = tools.find(t => t.name === 'issue_create');
+  const comment = tools.find(t => t.name === 'issue_comment');
+  const get = tools.find(t => t.name === 'issue_get');
+
+  const created = await create.execute({ title: '带图的评论', body: '正文没有图' }, exec);
+  await comment.execute({ id: created.id, body: '截图在这', images: [pngFile()] }, exec);
+
+  const got = await get.execute({ id: created.id }, exec);
+  assert.equal(got.attachments.length, 1);
+  const [att] = got.attachments;
+  assert.match(att.where, /^comment:\d+$/);
+  assert.equal(att.name, 'shot.png');
+  assert.equal(att.mime, 'image/png');
+  assert.ok(att.path && existsSync(att.path), 'path 必须真实存在，Bot 才能 read_image');
+  assert.equal(readFileSync(att.path).length, 8);
+});
+
+test('issue_get dedupes the same attachment and staging is idempotent', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const stagingDir = join(mkdtempSync(join(tmpdir(), 'stage-')), 'issue-attachments');
+  const { ctx, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, stagingDir, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const create = tools.find(t => t.name === 'issue_create');
+  const comment = tools.find(t => t.name === 'issue_comment');
+  const get = tools.find(t => t.name === 'issue_get');
+  const png = pngFile();
+
+  // 同一张图：正文一次、评论一次
+  const created = await create.execute({ title: '同一张图', body: '先看这张', images: [png] }, exec);
+  await comment.execute({ id: created.id, body: '再贴一次同一张', images: [png] }, exec);
+
+  const first = await get.execute({ id: created.id }, exec);
+  assert.equal(first.attachments.length, 1, '同一个附件 id 只返回一条');
+
+  const second = await get.execute({ id: created.id }, exec);
+  assert.equal(second.attachments[0].path, first.attachments[0].path, '两次调用落到同一个文件');
+  const files = readdirSync(dirname(first.attachments[0].path));
+  assert.equal(files.length, 1, 'stage 目录里只有一个文件，不会无限增长');
 });
