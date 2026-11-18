@@ -527,10 +527,11 @@ test('in_review→dispatched 打回重做，必须带意见', () => {
   store.close();
 });
 
-test('验收通过（in_review→done）只有主 Bot 或人能做', () => {
+test('验收通过（in_review→done）只有用户能做，主 Bot 也不能点', () => {
   const { store, id } = toInReview();
   assert.throws(() => store.update(id, { status: 'done', result: '验收通过' }, { kind: 'agent', name: '伟峰', isMain: false }), err => err.code === 'FORBIDDEN_TRANSITION');
-  const done = store.update(id, { status: 'done', result: '验收通过' }, { kind: 'agent', name: '鲸鱼', isMain: true });
+  assert.throws(() => store.update(id, { status: 'done', result: '验收通过' }, { kind: 'agent', name: '鲸鱼', isMain: true }), err => err.code === 'FORBIDDEN_TRANSITION');
+  const done = store.update(id, { status: 'done', result: '验收通过' }, { kind: 'user' });
   assert.equal(done.status, 'done');
   store.close();
 });

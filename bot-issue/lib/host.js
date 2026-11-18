@@ -694,13 +694,13 @@ export function apply(ctx, config = {}) {
 
     toolsCtx.effect(() => register({
       name: 'issue_update',
-      description: `更新事务：改状态、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}）；传 expectedVersion 可避免覆盖别人的改动。`,
+      description: `更新事务：改状态、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}）；只有用户能推进到 done（已闭环），主 Bot 到 in_review（待验收）即视为交验；传 expectedVersion 可避免覆盖别人的改动。`,
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
-          status: { type: 'string', enum: statusEnum, description: `目标状态（${statusGloss}）` },
-          result: { type: 'string', description: '闭环结果/验收意见（done 时必填，写清验证了什么，不要只写状态）' },
+          status: { type: 'string', enum: statusEnum, description: `目标状态（${statusGloss}）。in_review=待验收（执行人交验、主 Bot 测试通过的终点）；done=已闭环（仅用户可点，主 Bot 点会被拒绝）` },
+          result: { type: 'string', description: '闭环结果/验收意见（用户把 in_review 推进到 done 时必填，写清验证了什么，不要只写状态）' },
           rejection: { type: 'string', description: '打回意见（把 in_review 打回 dispatched 时必填）' },
           title: { type: 'string' },
           body: { type: 'string' },

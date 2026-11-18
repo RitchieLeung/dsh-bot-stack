@@ -430,10 +430,12 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     if (patch.expectedVersion !== undefined && patch.expectedVersion !== row.version) {
       throw failure('VERSION_CONFLICT', `issue 已被改动（v${row.version}），请重新读取后再写`);
     }
-    // 闭环认可：验收通过（in_review→done）与打回重做（in_review→dispatched）只有
-    // 主 Bot 或人能决定——工作者不能自己验收自己，也不能替主 Bot 打回。
-    const isReviewer = actor.kind === 'user' || actor.isMain === true;
-    if (next !== from && from === 'in_review' && (next === 'done' || next === 'dispatched') && !isReviewer) {
+    // 闭环（in_review→done）只有用户能点：主 Bot 的终点是「待验收」，验收通过由人把关。
+    // 打回重做（in_review→dispatched）主 Bot 或用户都能做——主 Bot 测试不通过时打回。
+    if (next !== from && from === 'in_review' && next === 'done' && actor.kind !== 'user') {
+      throw failure('FORBIDDEN_TRANSITION', '只有用户能「已闭环」；主 Bot 推进到「待验收」即视为交验，请用户验收');
+    }
+    if (next !== from && from === 'in_review' && next === 'dispatched' && !(actor.kind === 'user' || actor.isMain === true)) {
       throw failure('FORBIDDEN_TRANSITION', `只有主 Bot 或用户能「${statusLabel(next)}」（当前是「${statusLabel(from)}」）`);
     }
     // 打回必须带打回意见，意见会写进时间线（kind='reject'），让经办人知道哪里要重做。
