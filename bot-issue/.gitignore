@@ -1,0 +1,8 @@
+node_modules/
+*.log
+
+# 运行时健康文件（插件启动时写入，不进版本库）
+health.json
+
+# 运行时诊断文件（插件每次启动重写，不进版本库）
+tools.json
