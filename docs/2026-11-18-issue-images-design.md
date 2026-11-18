@@ -23,7 +23,7 @@ Bot 读图必须用 `read_image` 读本地路径，只会拿到 URL——这正�
 
 ## 非目标
 
-- 不做视频 / 任意文件类型。沿用现有 mime 白名单：png / jpeg / webp / gif
+- 不做视频 / 任意文件类型。Bot 侧的 `images` 只认 png / jpg / jpeg / gif / webp（不含 svg，且按文件头嗅探，扩展名不作数）
 - 不做「给一个 URL 自动下载」——Bot 必须自己把文件落盘
 - 不做缩略图 / 压缩 / 图床
 - 不改用户侧上传（浏览器 → `action=upload` 那条路已经能用）

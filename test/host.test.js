@@ -299,10 +299,16 @@ function tempDb() {
   return join(mkdtempSync(join(tmpdir(), 'iss-db-')), 'issue.sqlite');
 }
 
-function pngFile(bytes = 8) {
+/** 真正的 1x1 PNG —— 现在按文件头嗅探，假字节会被 NOT_AN_IMAGE 挡掉。 */
+const PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+  'base64',
+);
+
+function pngFile() {
   const dir = mkdtempSync(join(tmpdir(), 'img-'));
   const file = join(dir, 'shot.png');
-  writeFileSync(file, Buffer.alloc(bytes, 0x89));
+  writeFileSync(file, PNG_BYTES);
   return file;
 }
 
@@ -326,8 +332,8 @@ test('imageMimeFor maps image extensions and rejects everything else', () => {
   assert.equal(host.imageMimeFor('/tmp/a.jpeg'), 'image/jpeg');
   assert.equal(host.imageMimeFor('/tmp/a.gif'), 'image/gif');
   assert.equal(host.imageMimeFor('/tmp/a.webp'), 'image/webp');
-  assert.equal(host.imageMimeFor('/tmp/a.svg'), 'image/svg+xml');
   assert.equal(host.imageMimeFor('/tmp/a.txt'), null);
+  assert.equal(host.imageMimeFor('/tmp/a.svg'), null, 'svg 不在 Bot 白名单里（设计非目标）');
   assert.equal(host.imageMimeFor('/tmp/a'), null);
 });
 
@@ -340,7 +346,7 @@ test('attachImages stores the file once and returns one markdown line per image'
   assert.equal(added[0].issueId, 'issue-1');
   assert.equal(added[0].name, 'shot.png');
   assert.equal(added[0].mime, 'image/png');
-  assert.equal(Buffer.from(added[0].data, 'base64').length, 8);
+  assert.equal(Buffer.from(added[0].data, 'base64').length, PNG_BYTES.length);
 
   assert.equal(result.attachments.length, 2);
   const lines = result.markdown.split('\n');
@@ -363,8 +369,11 @@ test('attachImages reports why a path cannot be used', () => {
     () => host.attachImages({ store, issueId: 'i', images: [join(tmpdir(), 'definitely-missing.png')] }),
     err => err.code === 'IMAGE_NOT_FOUND',
   );
+  const emptyDir = mkdtempSync(join(tmpdir(), 'empty-'));
+  const empty = join(emptyDir, 'empty.png');
+  writeFileSync(empty, Buffer.alloc(0));
   assert.throws(
-    () => host.attachImages({ store, issueId: 'i', images: [pngFile(0)] }),
+    () => host.attachImages({ store, issueId: 'i', images: [empty] }),
     err => err.code === 'EMPTY_IMAGE',
   );
   assert.throws(
@@ -475,7 +484,7 @@ test('issue_get stages comment images and returns a readable local path', async 
   assert.equal(att.name, 'shot.png');
   assert.equal(att.mime, 'image/png');
   assert.ok(att.path && existsSync(att.path), 'path 必须真实存在，Bot 才能 read_image');
-  assert.equal(readFileSync(att.path).length, 8);
+  assert.equal(readFileSync(att.path).length, PNG_BYTES.length);
 });
 
 test('issue_get dedupes the same attachment and staging is idempotent', async () => {
@@ -500,4 +509,99 @@ test('issue_get dedupes the same attachment and staging is idempotent', async ()
   assert.equal(second.attachments[0].path, first.attachments[0].path, '两次调用落到同一个文件');
   const files = readdirSync(dirname(first.attachments[0].path));
   assert.equal(files.length, 1, 'stage 目录里只有一个文件，不会无限增长');
+});
+
+// ── 复审轮：缺陷复现（自审发现）────────────────────────────────────────────
+
+let lastDbPath = null;
+function countAttachmentFiles() {
+  const dir = join(dirname(lastDbPath), 'attachments');
+  return existsSync(dir) ? readdirSync(dir).length : 0;
+}
+
+function applyHost(extra = {}) {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const stagingDir = join(mkdtempSync(join(tmpdir(), 'stage-')), 'issue-attachments');
+  const { ctx, routes, tools } = mockCtx();
+  lastDbPath = tempDb();
+  host.apply(ctx, { dbPath: lastDbPath, statePath, stagingDir, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999, ...extra });
+  return { tools, fetch: routes[0].fetch, stagingDir };
+}
+
+test('issue_create with a bad image does not leave a half-created issue', async () => {
+  const { tools } = applyHost();
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const create = tools.find(t => t.name === 'issue_create');
+
+  await assert.rejects(
+    () => create.execute({ title: '半成品', body: '正文', images: [pngFile(), join(tmpdir(), 'definitely-missing.png')] }, exec),
+    err => err.code === 'IMAGE_NOT_FOUND',
+  );
+
+  const list = await tools.find(t => t.name === 'issue_list').execute({}, exec);
+  assert.deepEqual(list.map(item => item.title), [], '校验失败时不该留下任何事务');
+});
+
+test('issue_update with a bad image stores no attachment at all', async () => {
+  const { tools } = applyHost();
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const created = await tools.find(t => t.name === 'issue_create').execute({ title: 'X', body: '正文' }, exec);
+  const before = await tools.find(t => t.name === 'issue_get').execute({ id: created.id }, exec);
+
+  await assert.rejects(
+    () => tools.find(t => t.name === 'issue_update').execute({ id: created.id, images: [pngFile(), join(tmpdir(), 'definitely-missing.png')] }, exec),
+    err => err.code === 'IMAGE_NOT_FOUND',
+  );
+
+  const files = countAttachmentFiles();
+  assert.equal(files, 0, `失败的那次不该留下孤儿附件（附件目录里有 ${files} 个文件）`);
+});
+
+test('attachImages rejects bytes that are not an image, even when named .png', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fake-'));
+  const fake = join(dir, 'sneaky.png');
+  writeFileSync(fake, 'TOP-SECRET');
+  const { added, store } = fakeAttachmentStore();
+
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: [fake] }),
+    err => err.code === 'NOT_AN_IMAGE',
+  );
+  assert.equal(added.length, 0, '不该把非图片内容存进附件库');
+});
+
+test('oversize image error names the offending file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'big-'));
+  const big = join(dir, 'huge.png');
+  writeFileSync(big, Buffer.alloc(10 * 1024 * 1024 + 1, 0x89));
+  const { added, store } = fakeAttachmentStore();
+
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: [big] }),
+    err => err.code === 'TOO_LARGE' && err.message.includes('huge.png'),
+  );
+  assert.equal(added.length, 0, '超限时不该先读进内存再失败');
+});
+
+test('svg is not in the bot whitelist (design non-goal: png/jpeg/webp/gif)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'svg-'));
+  const svg = join(dir, 'x.svg');
+  writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  const { added, store } = fakeAttachmentStore();
+  assert.throws(
+    () => host.attachImages({ store, issueId: 'i', images: [svg] }),
+    err => err.code === 'UNSUPPORTED_IMAGE',
+  );
+  assert.equal(added.length, 0);
+});
+
+test('staging caps at MAX_STAGED_ATTACHMENTS and reports how many were skipped', () => {
+  const ids = Array.from({ length: 21 }, (_, i) => `${i.toString(16)}`.padStart(16, 'a'));
+  const texts = ids.map((id, i) => ({ where: `comment:${i}`, text: `![x](/api/bot-issue?attachment=${id})` }));
+  const store = () => ({ getAttachment: id => ({ id, name: `${id}.png`, mime: 'image/png', bytes: 8, filePath: '/tmp/definitely-missing-file' }) });
+  const stagingDir = mkdtempSync(join(tmpdir(), 'stagecap-'));
+
+  const result = host.stageIssueAttachments({ store, stagingDir, issueNumber: 1, texts });
+  assert.equal(result.attachments.length, host.MAX_STAGED_ATTACHMENTS);
+  assert.equal(result.skipped, 1);
 });

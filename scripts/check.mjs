@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', '.cache']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'coverage', '.cache', '.superpowers']);
 const CHECK_EXT = /\.(js|mjs|cjs)$/;
 
 function walk(dir, out) {

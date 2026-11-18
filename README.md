@@ -11,7 +11,7 @@ Bot 的记忆；这个插件拥有自己的可写数据库、自己的 HTTP 路�
 - **issue 一等对象**：标题、正文、状态、经办人（主 Bot）、父 issue、时间线、评论、结果。
 - **主 Bot 工具** `issue_create / issue_list / issue_get / issue_update / issue_link / issue_unlink / issue_comment`。
 - **图片**：`issue_comment` / `issue_create` / `issue_update` 都支持 `images: ['/abs/shot.png']`
-  （绝对路径，png/jpg/jpeg/gif/webp/svg，最多 8 张）；`issue_get` 返回的 `attachments[].path`
+  （绝对路径，png/jpg/jpeg/gif/webp，按文件头校验，最多 8 张）；`issue_get` 返回的 `attachments[].path`
   是 stage 到共享工作区后的本地路径，Bot 用它 `read_image` 就能真的看到图。
 - **「事务」面板**：列表（按状态筛选）、新建、详情（时间线 + 评论 + 派工记录）、状态流转。
 - **状态机**：`open → discussing → dispatched → in_review → done | failed | cancelled`。

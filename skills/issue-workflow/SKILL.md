@@ -60,7 +60,7 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 - 截图先落成本地文件（Playwright 就 `await page.screenshot({ path: '/tmp/shot.png' })`），
   再一次调用带上：`issue_comment(id, '说明', images: ['/tmp/shot.png'])`。
 - `images` 要**绝对路径**（或 `~` 开头）：相对路径会被拒绝，因为每只 Bot 的工作目录不同。
-  只认 png / jpg / jpeg / gif / webp / svg，单次最多 8 张、单张 10MB。
+  只认 png / jpg / jpeg / gif / webp（按文件头识别，改扩展名骗不过去），单次最多 8 张、单张 10MB。
 - 只发图不写字也行；`issue_create` / `issue_update` 同样支持 `images`。
 
 **要看别人贴的图：**
