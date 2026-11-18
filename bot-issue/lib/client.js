@@ -981,6 +981,13 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
             const value = await call('start', { id });
             if (value?.dispatched) { setStarted(true); setNote(value.note || '已交给主 Bot'); }
             else setNote(`未派工：${value?.reason || '未知原因'}`);
+          } else if (status === 'done') {
+            const opinion = window.prompt('验收意见（必填，写清你验证了什么）：');
+            if (opinion == null) return;
+            if (!opinion.trim()) { setError(Object.assign(new Error('验收必须写意见'), { code: 'RESULT_REQUIRED' })); return; }
+            await call('update', { id, status: 'done', result: opinion.trim(), authorKind: 'user' });
+            setNote('已验收通过，意见已写入闭环结果');
+            onChanged?.();
           } else if (status === 'reject') {
             const opinion = window.prompt('打回意见（必填，会同步给经办人）：');
             if (opinion == null) return;

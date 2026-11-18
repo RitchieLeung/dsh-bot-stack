@@ -442,18 +442,29 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
         throw failure('REJECTION_REQUIRED', '打回必须写打回意见');
       }
     }
-    // Completing an issue is gated on its dependencies: 「B 完成 A 才能完成」.
-    // Cancelled/failed dependencies count as unfinished on purpose — otherwise
-    // cancelling the blocker would become a way around the dependency.
+    // Completing an issue is gated on its dependencies AND its children: a parent
+    // can't be done while a sub-issue is still open.
     if (next !== from && next === 'done') {
       const blocking = openDepsOf(id);
       if (blocking.length) {
         throw failure('BLOCKED_BY_DEPS', `前置还没闭环，不能验收通过：${blocking.map(issueRef).join('、')}`);
       }
+      const openChildren = selectChildren.all(id).filter(child => !TERMINAL_STATUSES.includes(child.status));
+      if (openChildren.length) {
+        throw failure('BLOCKED_BY_CHILDREN', `还有 ${openChildren.length} 个子事务没闭环，不能验收通过：${openChildren.map(issueRef).join('、')}`);
+      }
+      // 验收通过必须写验收意见（result）：只看状态位不算验收。
+      if (typeof patch.result !== 'string' || !patch.result.trim()) {
+        throw failure('RESULT_REQUIRED', '验收通过必须写验收意见（result）');
+      }
     }
     const title = patch.title !== undefined ? assertTitle(patch.title) : row.title;
     const body = patch.body !== undefined ? String(patch.body) : row.body;
-    const result = patch.result !== undefined ? (patch.result === null ? null : String(patch.result)) : row.result;
+    // 重开（done/failed/cancelled → 活跃状态）时清掉旧的 result，避免读到过期结论。
+    const reopening = next !== from && TERMINAL_STATUSES.includes(from) && !TERMINAL_STATUSES.includes(next);
+    const result = patch.result !== undefined
+      ? (patch.result === null ? null : String(patch.result))
+      : (reopening ? null : row.result);
     // `tags` (array, replaces everything) wins; `type` is the single-label alias.
     const nextTags = patch.tags !== undefined
       ? normalizeTags(patch.tags)
