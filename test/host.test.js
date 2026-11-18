@@ -294,6 +294,11 @@ test('tool schemas only use single type strings (dsh rejects type arrays like [\
 
 // ── 事务图片（docs/2026-11-18-issue-images-design.md）────────────────────────
 
+/** 图片相关测试要真实文件库：:memory: 的 store 没有附件目录。 */
+function tempDb() {
+  return join(mkdtempSync(join(tmpdir(), 'iss-db-')), 'issue.sqlite');
+}
+
 function pngFile(bytes = 8) {
   const dir = mkdtempSync(join(tmpdir(), 'img-'));
   const file = join(dir, 'shot.png');
@@ -374,4 +379,41 @@ test('attachImages with no images is a no-op', () => {
   assert.equal(added.length, 0);
   assert.deepEqual(result, { markdown: '', attachments: [] });
   assert.deepEqual(host.attachImages({ store, issueId: 'issue-1' }), { markdown: '', attachments: [] });
+});
+
+test('issue_comment appends image markdown and stores the attachment', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, routes, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: '登录页', body: '看看' });
+  const id = created.value.issue.id;
+  const exec = { agent: { session: { id: 'session-main' } } };
+
+  const comment = tools.find(t => t.name === 'issue_comment');
+  const out = await comment.execute({ id, body: '登录页改好了', images: [pngFile()] }, exec);
+  assert.equal(out.images, 1);
+
+  const got = await tools.find(t => t.name === 'issue_get').execute({ id }, exec);
+  const last = got.comments.at(-1);
+  assert.match(last, /登录页改好了/);
+  assert.match(last, /!\[shot\.png\]\(\/api\/bot-issue\?attachment=[0-9a-f]+\)/);
+});
+
+test('issue_comment allows an images-only comment but still rejects an empty one', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, routes, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const created = await post(routes[0].fetch, { action: 'create', title: 'X' });
+  const id = created.value.issue.id;
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const comment = tools.find(t => t.name === 'issue_comment');
+
+  const only = await comment.execute({ id, body: '', images: [pngFile()] }, exec);
+  assert.equal(only.images, 1);
+
+  await assert.rejects(
+    () => comment.execute({ id, body: '   ' }, exec),
+    err => /评论不能为空/.test(err.message),
+  );
 });
