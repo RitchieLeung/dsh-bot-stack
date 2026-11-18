@@ -1,0 +1,26 @@
+{
+  "name": "dsh-plugin-bot-knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bot knowledge panel for DSCord bots: read-only view of every Bot's memories and daily work reports.",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node scripts/check.mjs",
+    "check": "node scripts/check.mjs && node --test test/*.test.js"
+  }
+}
