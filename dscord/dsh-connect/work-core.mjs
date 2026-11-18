@@ -21,8 +21,9 @@ export const FRONT_TOOLS = new Set([
   // Quick Bot-level actions: memory, team and schedules belong to the Bot itself.
   'remember', 'forget', 'review_memory', 'schedule_create', 'schedule_edit',
   'create_bot', 'update_bot', 'stop_bot', 'create_group', 'update_group', 'delete_group', 'group_goal',
-  // 事务（issue）板：主 Bot 在前台直接管理 issue——建/列/读/流转/评论，不派工给工作者。
+  // 事务（issue）板：主 Bot 在前台直接管理 issue——建/列/读/流转/评论/指派/依赖。
   'issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_comment',
+  'issue_assign', 'issue_link', 'issue_unlink',
 ]);
 // Workers do the work; they do not speak for the Bot or change the team.
 export const WORKER_DENY = new Set([
@@ -30,8 +31,8 @@ export const WORKER_DENY = new Set([
   'create_bot', 'update_bot', 'stop_bot', 'create_group', 'update_group', 'delete_group', 'group_goal',
   'schedule_create', 'schedule_edit', 'remember', 'forget', 'review_memory',
   'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note',
-  // 工作者只做事并用 work_report 汇报，不直接改事务。
-  'issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_comment',
+  // 工作者可读事务、评论并推进到待验收；建单、指派和改依赖仍归主 Bot。
+  'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',
 ]);
 // Desktop cards: in DSCord nobody sees them, and a turn that ends on one has no reply to send (script 02 G16).
 export const CARD_TOOLS = new Set(['ask_user', 'ask_user_question', 'show_view']);

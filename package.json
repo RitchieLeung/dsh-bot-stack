@@ -9,7 +9,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "npm --prefix bot-issue run check && npm --prefix bot-knowledge run check && node --test test/*.test.js",
+    "check": "npm --prefix bot-issue run check && npm --prefix bot-knowledge run check && node --test dscord/test/*.test.mjs && node --test test/*.test.js",
     "pack": "node scripts/pack.mjs",
     "pack:release": "node scripts/pack.mjs --release",
     "deploy:146": "bash scripts/deploy-146.sh"
