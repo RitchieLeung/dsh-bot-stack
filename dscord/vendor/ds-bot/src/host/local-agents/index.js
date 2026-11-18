@@ -95,7 +95,11 @@ export function install(rt) {
     probeCwd: () => mkdtempSync(join(tmpdir(), 'dsb-probe-')),
     toolsFor: (options) => {
       // Only DS Bot's own team tools cross the bridge; the CLI keeps its own.
-      const names = new Set([...rt.teamTools.map(def => def.name), 'approve_agent_action'])
+      // 事务板（dsh-plugin-bot-issue）的执行人工具也过桥：本地引擎（Codex/Claude/ACP）
+      // 拿不到 DSH 原生的 issue_*，靠 dsbot MCP 桥过去才能参与验收。只桥文本型工具：
+      // read_image 返回图片、桥不过去，这里不放。
+      const names = new Set([...rt.teamTools.map(def => def.name), 'approve_agent_action',
+        'issue_get', 'issue_list', 'issue_comment', 'issue_update'])
       return (options.tools ?? []).filter(tool => names.has(tool.name))
     },
   })
