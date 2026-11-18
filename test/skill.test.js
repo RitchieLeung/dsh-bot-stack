@@ -23,3 +23,11 @@ test('provider 列出 issue-workflow skill 且能取到内容', async () => {
   assert.ok(item.content.length > 0);
   assert.match(item.content, /闭环/);
 });
+
+test('SKILL.md 说明怎么贴图、怎么看别人贴的图', () => {
+  const md = readFileSync(new URL('../skills/issue-workflow/SKILL.md', import.meta.url), 'utf8');
+  assert.match(md, /images/);
+  assert.match(md, /read_image/);
+  assert.match(md, /绝对路径/);
+  assert.match(md, /attachments/);
+});

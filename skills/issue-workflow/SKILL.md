@@ -53,6 +53,22 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 - 评论都落在事务时间线里，双方都看得到。
 - 你评论 / 推进状态时，对侧（主 Bot ↔ 执行人）会自动收到知会，不用再重复 `message_bot`。
 
+## 贴图与看图
+
+**你有截图/产出图时，贴进评论，不要只说「已截图」却不给图。**
+
+- 截图先落成本地文件（Playwright 就 `await page.screenshot({ path: '/tmp/shot.png' })`），
+  再一次调用带上：`issue_comment(id, '说明', images: ['/tmp/shot.png'])`。
+- `images` 要**绝对路径**（或 `~` 开头）：相对路径会被拒绝，因为每只 Bot 的工作目录不同。
+  只认 png / jpg / jpeg / gif / webp / svg，单次最多 8 张、单张 10MB。
+- 只发图不写字也行；`issue_create` / `issue_update` 同样支持 `images`。
+
+**要看别人贴的图：**
+
+- `issue_get` 返回的 `attachments[].path` 才是本地路径，用 `read_image` 读它。
+  **别拿 `attachments[].url` 去读**——那是给浏览器/人看的接口地址，Bot 读不到。
+- 没有 `path` 的条目会带 `note` 说明为什么拿不到（文件被删、复制失败等），照实说，别猜图里是什么。
+
 ## 状态机（人话）
 
 `待处理 → 讨论中 → 进行中 → 待验收 → 已闭环`，另有 `失败`、`已取消`。
