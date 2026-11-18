@@ -551,3 +551,25 @@ test('worker 可把自己那单 进行中→待验收（交结果）', () => {
   assert.equal(reported.status, 'in_review');
   store.close();
 });
+
+test('seen persists across reopen, only advances, and does not touch issue version', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-seen-'));
+  const dbPath = join(dir, 'issue.sqlite');
+  let store = openIssueStore({ dbPath });
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+
+  assert.deepEqual(store.markSeen(a.id, 3), { [a.id]: 3 });
+  store.markSeen(a.id, 2);
+  store.markSeenMany({ [b.id]: 4 });
+  assert.equal(store.get(a.id).version, 1, '已读不能给事务制造未读更新');
+  assert.equal(store.get(b.id).version, 1);
+  assert.throws(() => store.markSeen('missing', 1), /找不到/);
+  store.close();
+
+  store = openIssueStore({ dbPath });
+  assert.deepEqual(store.seen(), { [a.id]: 3, [b.id]: 4 });
+  store.markSeenMany({ [a.id]: 1, [b.id]: 2 });
+  assert.deepEqual(store.seen(), { [a.id]: 3, [b.id]: 4 }, '批量迁移也不能覆盖更高的已读版本');
+  store.close();
+});
