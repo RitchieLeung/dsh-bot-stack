@@ -417,3 +417,40 @@ test('issue_comment allows an images-only comment but still rejects an empty one
     err => /评论不能为空/.test(err.message),
   );
 });
+
+test('issue_create appends image markdown to the new body', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const exec = { agent: { session: { id: 'session-main' } } };
+
+  const created = await tools.find(t => t.name === 'issue_create')
+    .execute({ title: '看图', body: '对比一下这两版', images: [pngFile()] }, exec);
+  const got = await tools.find(t => t.name === 'issue_get').execute({ id: created.id }, exec);
+  assert.match(got.body, /对比一下这两版/);
+  assert.match(got.body, /!\[shot\.png\]\(\/api\/bot-issue\?attachment=[0-9a-f]+\)/);
+});
+
+test('issue_update with images only appends to the existing body', async () => {
+  const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
+  const { ctx, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const create = tools.find(t => t.name === 'issue_create');
+  const update = tools.find(t => t.name === 'issue_update');
+  const get = tools.find(t => t.name === 'issue_get');
+
+  const created = await create.execute({ title: '原文', body: '原始正文' }, exec);
+  const png = pngFile();
+
+  await update.execute({ id: created.id, images: [png] }, exec);
+  let got = await get.execute({ id: created.id }, exec);
+  assert.match(got.body, /原始正文/, '只带图不能把正文清空');
+  assert.equal((got.body.match(/!\[shot\.png\]/g) || []).length, 1);
+
+  // 再贴一次：追加（同图去重是 store 的事，正文里允许两行）
+  await update.execute({ id: created.id, images: [png] }, exec);
+  got = await get.execute({ id: created.id }, exec);
+  assert.equal((got.body.match(/!\[shot\.png\]/g) || []).length, 2);
+  assert.match(got.body, /原始正文/);
+});
