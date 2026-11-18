@@ -68,7 +68,7 @@ writeFileSync(join(profile, 'node_modules', name, 'package.json'), JSON.stringif
 import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (process.env.FAKE_DSH_LOG) appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify({ pnpm: args }) + '\\n');
-if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball)  skills' + (process.env.FAKE_PNPM_OTHER_PENDING ? '\\n  other-package (tarball)  scripts' : ''));
+if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball) [dsh-plugin-bot-issue@file:../../bot/packages/build/pkg.tgz]  skills' + (process.env.FAKE_PNPM_OTHER_PENDING ? '\\n  other-package (tarball)  scripts' : ''));
 `);
   chmodSync(pnpmBin, 0o755);
 

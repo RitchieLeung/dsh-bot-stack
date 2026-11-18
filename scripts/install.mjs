@@ -166,7 +166,7 @@ function approveIssueSkills(profileDir, dshBin, pnpmBin) {
   const awaiting = output.split(/Awaiting approval:/i)[1]?.split(/Run "pnpm approve"/i)[0] || '';
   const pendingLines = awaiting.split('\n').map(line => line.trim()).filter(Boolean);
   if (pendingLines.length === 0) return;
-  const onlyIssueSkills = pendingLines.every(line => /^dsh-plugin-bot-issue(?:\s+\(tarball\))?\s+skills$/.test(line));
+  const onlyIssueSkills = pendingLines.every(line => /^dsh-plugin-bot-issue(?:\s+\(tarball\))?(?:\s+\[dsh-plugin-bot-issue@[^\]]+\])?\s+skills$/.test(line));
   if (!onlyIssueSkills) {
     throw new Error(`pnpm 待批准列表含其他包或权限，拒绝 blanket approve：${pendingLines.join('；')}`);
   }
