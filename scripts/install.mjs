@@ -163,11 +163,18 @@ function approveIssueSkills(profileDir, dshBin, pnpmBin) {
   if (list.error) throw list.error;
   if (list.status !== 0) throw new Error(`pnpm permissions list 失败：${list.stderr || list.stdout}`);
   const output = `${list.stdout || ''}\n${list.stderr || ''}`;
-  if (!/dsh-plugin-bot-issue[\s\S]*?skills/.test(output)) return;
+  const awaiting = output.split(/Awaiting approval:/i)[1]?.split(/Run "pnpm approve"/i)[0] || '';
+  const pendingLines = awaiting.split('\n').map(line => line.trim()).filter(Boolean);
+  if (pendingLines.length === 0) return;
+  const onlyIssueSkills = pendingLines.every(line => /^dsh-plugin-bot-issue(?:\s+\(tarball\))?\s+skills$/.test(line));
+  if (!onlyIssueSkills) {
+    throw new Error(`pnpm 待批准列表含其他包或权限，拒绝 blanket approve：${pendingLines.join('；')}`);
+  }
 
-  // 只批准本仓库事务包附带的 issue-workflow skill，不使用 --all，也不批准其他包。
-  console.log('批准事务包自带的 issue-workflow skill（不批准其他包或构建脚本）');
-  const approved = spawnSync(bin, ['approve', 'dsh-plugin-bot-issue', '--yes'], {
+  // pnpm 12 的具名 approve 不会清掉 tarball 形态的待批准项。只有确认列表里
+  // 全部是本仓库事务 skill 后，才允许 --all；有任何其他项都在上面拒绝。
+  console.log('待批准项仅为事务包 issue-workflow skill，批准该 tarball skill');
+  const approved = spawnSync(bin, ['approve', '--all', '--yes'], {
     cwd: profileDir,
     env: dshEnv(dshBin),
     stdio: 'inherit',

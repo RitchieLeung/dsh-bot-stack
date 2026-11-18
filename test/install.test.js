@@ -68,7 +68,7 @@ writeFileSync(join(profile, 'node_modules', name, 'package.json'), JSON.stringif
 import { appendFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (process.env.FAKE_DSH_LOG) appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify({ pnpm: args }) + '\\n');
-if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball)  skills');
+if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball)  skills' + (process.env.FAKE_PNPM_OTHER_PENDING ? '\\n  other-package (tarball)  scripts' : ''));
 `);
   chmodSync(pnpmBin, 0o755);
 
@@ -146,7 +146,7 @@ test('install uses persistent tarballs, activates bundles once, and keeps backup
   assert.equal(existsSync(join(ctx.backupRoot, 'profile', 'package.json')), true);
   assert.equal(existsSync(join(ctx.backupRoot, 'installed', 'dscord', 'package.json')), true);
   const calls = readFileSync(ctx.log, 'utf8');
-  assert.ok(calls.includes('"pnpm":["approve","dsh-plugin-bot-issue","--yes"]'), '事务自带的 issue-workflow skill 必须被明确批准');
+  assert.ok(calls.includes('"pnpm":["approve","--all","--yes"]'), '确认待批准列表只有事务 skill 后，必须批准 tarball 形态');
 
   const second = runInstall(ctx);
   assert.equal(second.status, 0, second.stderr);
@@ -168,6 +168,16 @@ test('dsh is executed with its own Node bin directory first in PATH', () => {
   const ctx = workspace();
   const result = runInstall(ctx, ['--dry-run'], { FAKE_DSH_REQUIRE_OWN_PATH: '1' });
   assert.equal(result.status, 0, `不能用 SSH 默认的旧 Node 启动 dsh：${result.stderr}`);
+});
+
+test('refuses blanket approval when another package or permission is pending', () => {
+  const ctx = workspace();
+  const result = runInstall(ctx, [], { FAKE_PNPM_OTHER_PENDING: '1' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /其他包|拒绝/);
+  const calls = existsSync(ctx.log) ? readFileSync(ctx.log, 'utf8') : '';
+  assert.ok(!calls.includes('"pnpm":["approve","--all","--yes"]'));
+  assert.equal(readFileSync(join(ctx.profileDir, 'package.json'), 'utf8'), ctx.originalPackageText);
 });
 
 test('unsupported DSH and Node versions are rejected', async () => {

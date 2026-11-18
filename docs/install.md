@@ -51,8 +51,9 @@ node scripts/install.mjs --profile web --dist ./dist
 3. 把 tarball 复制到 `~/.dsh/bot/packages/<build>/`，避免依赖临时目录。
 4. 用 `dsh plugin add` 安装，并加 `--ignore-scripts`。
 5. 幂等地把 `dscord`、`dsh-plugin-bot-knowledge`、`dsh-plugin-bot-issue` 加入 `dsh.profile.bundles`。
-6. 如果 pnpm 把事务包的 `issue-workflow` skill 标为待批准，只对这个包执行
-   `pnpm approve dsh-plugin-bot-issue --yes`；不使用 `--all`，也不批准其他包或构建脚本。
+6. 如果 pnpm 把事务包的 `issue-workflow` skill 标为待批准，先确认待批准列表里
+   **只有这个 tarball skill**，再执行 `pnpm approve --all --yes`（pnpm 12 的具名 approve
+   清不掉 tarball 形态）。若列表含其他包或权限，安装器拒绝 blanket approve 并恢复。
 7. 安装中途失败时恢复本次修改过的 profile 和 package 目录。
 
 成功后按原方式启动 `dsh web`，再刷新浏览器。安装器本身不重启服务。
