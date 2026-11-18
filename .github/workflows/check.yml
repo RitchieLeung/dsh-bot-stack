@@ -5,18 +5,14 @@ on:
   pull_request:
 
 jobs:
-  plugin:
+  check:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        directory:
-          - bot-issue
-          - bot-knowledge
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: 语法检查 + 测试
-        run: npm --prefix "${{ matrix.directory }}" run check
+      - name: 安装 pnpm（重装行为测试需要）
+        run: npm install --global pnpm@12.18.0
+      - name: 插件测试 + 打包/安装/部署脚本测试
+        run: npm run check

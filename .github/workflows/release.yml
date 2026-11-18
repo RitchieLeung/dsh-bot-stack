@@ -1,0 +1,33 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'stack-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 安装 pnpm
+        run: npm install --global pnpm@12.18.0
+      - name: 完整检查
+        run: npm run check
+      - name: 构建正式安装包
+        run: npm run pack:release
+      - name: 发布 tarball 与校验文件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" \
+            dist/*.tgz dist/SHA256SUMS dist/manifest.json \
+            --title "$tag" \
+            --generate-notes

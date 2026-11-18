@@ -23,7 +23,14 @@ EOF
   exit 0
 fi
 
-HOST="${DEPLOY_HOST:-146.56.202.108}"
+# 本机私有连接信息不进入 git；没有该文件时默认使用 ssh alias `146`。
+if [ -f "$ROOT/.deploy-146.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.deploy-146.env"
+  set +a
+fi
+HOST="${DEPLOY_HOST:-146}"
 REMOTE_ROOT="${REMOTE_ROOT:-/home/liangliqiang/dsh-bot-stack}"
 NODE_HOME="${DSH_NODE_HOME:-/home/liangliqiang/.nvm/versions/node/v24.22.2}"
 SERVICE="${DSH_SERVICE:-dsh-web.service}"
