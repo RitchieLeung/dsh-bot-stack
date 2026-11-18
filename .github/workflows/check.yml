@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory:
+          - bot-issue
+          - bot-knowledge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 语法检查 + 测试
+        run: npm --prefix "${{ matrix.directory }}" run check

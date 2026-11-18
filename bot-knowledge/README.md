@@ -69,22 +69,20 @@ plugin_manager install_bundle → target: file:$DSH_HOME/bot/workspace/bot-knowl
 
 **从 2026-11-11 起，这个 profile 用的 dscord 是自建 fork，不再是官方 tgz。**
 
-- 位置：`dscord-fork/`（独立 git 仓库，源自 `dscord-0.4.0-alpha.2.tgz`，Apache-2.0）
-- profile 依赖：`"dscord": "file:.../bot-knowledge/dscord-fork"`
-- ⚠️ `node_modules/dscord` 是 **快照，不是软链**——pnpm 把整个目录复制了一份。改完 fork 必须跑
-  `dscord-fork/sync.sh` 才进 profile，然后重启 dsh 生效。（试过软链：fork 目录没有
-  `node_modules`，`deep-view` 等依赖解析失败，整个 DSCord 插件加载不了。）
-- 改动清单与上游升级流程：见 [`dscord-fork/FORK.md`](dscord-fork/FORK.md)
+- **在合并仓库里**，fork 源码位于 [`../dscord/`](../dscord/)；改动清单与上游升级流程见
+  [`../dscord/FORK.md`](../dscord/FORK.md)。
+- **在线上工作区里**，历史路径仍是 `~/.dsh/bot/workspace/bot-knowledge/dscord-fork/`，
+  profile 依赖仍为 `"dscord": "file:.../bot-knowledge/dscord-fork"`。合并 GitHub 仓库没有改变线上路径。
+- ⚠️ `node_modules/dscord` 是 **快照，不是软链**——改完线上 fork 必须跑 `dscord-fork/sync.sh`
+  才进 profile，然后重启 dsh 生效。（试过软链：fork 目录没有 `node_modules`，依赖解析失败。）
 
-### ⚠️ dscord-fork 是嵌在本仓库里的独立库
+### 线上工作区的嵌套目录注意事项
 
-`dscord-fork/` 有自己的 `.git`，并且被本仓库的 `.gitignore` 忽略。这是历史遗留的目录布局
-（profile 的 `file:` 依赖指向这个绝对路径，挪它要改 profile + 重装 + 重启 dsh，所以一直没动）。
+线上 `dscord-fork/` 仍是嵌在 `bot-knowledge/` 工作目录里的独立 git 仓库，并被那边的
+`.gitignore` 忽略；这是为了不改动 profile 的绝对路径依赖。因此**只在线上工作区**，
+`git clean -fdx` 会把嵌套的 `dscord-fork/` 连同历史一起删掉，清理时不要带 `-x`。
 
-后果：**在本目录执行 `git clean -fdx` 会把 `dscord-fork/` 整个删掉**（连同它自己的 git 历史）。
-清理前先确认，或者干脆别用 `-x`。
-
-它自己在 GitHub 上有独立仓库：`RitchieLeung/dscord`。
+合并后的 GitHub 仓库不存在这个嵌套仓库问题：`dscord/` 与 `bot-knowledge/` 是同级目录。
 
 fork 里带了：
 
