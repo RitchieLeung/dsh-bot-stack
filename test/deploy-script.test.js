@@ -47,7 +47,13 @@ test('deployment message expands HEAD safely before Chinese punctuation on Bash 
   const result = spawnSync('bash', [LOCAL, '--allow-dirty'], {
     cwd: ROOT,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DIST_DIR: dist },
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      DIST_DIR: dist,
+      REMOTE_ROOT: join(dir, 'remote'),
+      DSH_NODE_HOME: join(dir, 'node24'),
+    },
   });
   assert.equal(result.status, 0, `不应在部署日志处失败：${result.stderr}`);
   assert.match(result.stdout, /部署 .*（build .*）到/);
