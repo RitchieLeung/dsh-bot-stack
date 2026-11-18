@@ -48,7 +48,7 @@ BUILD_ID="$(node -e "const m=require('./dist/manifest.json');process.stdout.writ
 HEAD="$(node -e "const m=require('./dist/manifest.json');process.stdout.write(m.stack.head)")"
 RELEASE_DIR="$REMOTE_ROOT/releases/$BUILD_ID"
 
-echo "部署 $HEAD（build $BUILD_ID）到 $HOST"
+echo "部署 ${HEAD}（build ${BUILD_ID}）到 ${HOST}"
 ssh "$HOST" "mkdir -p '$RELEASE_DIR/scripts'"
 rsync -az --delete "$ROOT/dist/" "$HOST:$RELEASE_DIR/dist/"
 rsync -az "$ROOT/scripts/install.mjs" "$ROOT/scripts/remote-deploy.sh" "$HOST:$RELEASE_DIR/scripts/"

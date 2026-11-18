@@ -33,6 +33,23 @@ test('local dry-run performs no ssh, rsync, npm, or systemctl actions', () => {
   assert.equal(existsSync(log), false, 'dry-run 不应调用任何外部部署命令');
 });
 
+test('deployment message expands HEAD safely before Chinese punctuation on Bash 3.2', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'deploy-head-'));
+  const bin = join(dir, 'bin');
+  mkdirSync(bin);
+  for (const name of ['npm', 'ssh', 'rsync']) {
+    writeFileSync(join(bin, name), '#!/bin/sh\nexit 0\n');
+    execFileSync('chmod', ['+x', join(bin, name)]);
+  }
+  const result = spawnSync('bash', [LOCAL, '--allow-dirty'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+  assert.equal(result.status, 0, `不应在部署日志处失败：${result.stderr}`);
+  assert.match(result.stdout, /部署 .*（build .*）到/);
+});
+
 test('backup_paths and restore_paths restore profile, node_modules, and data together', () => {
   const root = mkdtempSync(join(tmpdir(), 'remote-restore-'));
   const profile = join(root, 'profile');
