@@ -33,6 +33,7 @@ function parseArgs(argv) {
     else if (arg === '--profile-dir') result.profileDir = resolve(argv[++i]);
     else if (arg === '--dist') result.dist = resolve(argv[++i]);
     else if (arg === '--dsh-bin') result.dshBin = argv[++i];
+    else if (arg === '--pnpm-bin') result.pnpmBin = argv[++i];
     else if (arg === '--packages-dir') result.packagesDir = resolve(argv[++i]);
     else if (arg === '--backup-root') result.backupRoot = resolve(argv[++i]);
     else if (arg === '--help' || arg === '-h') result.help = true;
@@ -152,6 +153,29 @@ function activateBundles(profileDir) {
   writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+function approveIssueSkills(profileDir, dshBin, pnpmBin) {
+  const bin = pnpmBin || join(dirname(dshBin), 'pnpm');
+  const list = spawnSync(bin, ['permissions', 'list'], {
+    cwd: profileDir,
+    env: dshEnv(dshBin),
+    encoding: 'utf8',
+  });
+  if (list.error) throw list.error;
+  if (list.status !== 0) throw new Error(`pnpm permissions list 失败：${list.stderr || list.stdout}`);
+  const output = `${list.stdout || ''}\n${list.stderr || ''}`;
+  if (!/dsh-plugin-bot-issue[\s\S]*?skills/.test(output)) return;
+
+  // 只批准本仓库事务包附带的 issue-workflow skill，不使用 --all，也不批准其他包。
+  console.log('批准事务包自带的 issue-workflow skill（不批准其他包或构建脚本）');
+  const approved = spawnSync(bin, ['approve', 'dsh-plugin-bot-issue', '--yes'], {
+    cwd: profileDir,
+    env: dshEnv(dshBin),
+    stdio: 'inherit',
+  });
+  if (approved.error) throw approved.error;
+  if (approved.status !== 0) throw new Error(`pnpm approve dsh-plugin-bot-issue 失败（exit ${approved.status}）`);
+}
+
 function install(options) {
   assertNodeVersion(process.versions.node);
   const dshHome = process.env.DSH_HOME || join(homedir(), '.dsh');
@@ -193,6 +217,7 @@ function install(options) {
       if (result.status !== 0) throw new Error(`dsh plugin add ${item.name} 失败（exit ${result.status}）`);
     }
     activateBundles(profileDir);
+    approveIssueSkills(profileDir, dshBin, options.pnpmBin);
   } catch (error) {
     try {
       restore(profileDir, backupRoot, saved);

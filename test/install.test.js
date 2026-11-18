@@ -63,6 +63,15 @@ writeFileSync(join(profile, 'node_modules', name, 'package.json'), JSON.stringif
 `);
   chmodSync(dshBin, 0o755);
 
+  const pnpmBin = join(root, 'pnpm');
+  writeFileSync(pnpmBin, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (process.env.FAKE_DSH_LOG) appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify({ pnpm: args }) + '\\n');
+if (args[0] === 'permissions' && args[1] === 'list') console.log('Awaiting approval:\\n  dsh-plugin-bot-issue (tarball)  skills');
+`);
+  chmodSync(pnpmBin, 0o755);
+
   return {
     root,
     home,
@@ -136,6 +145,8 @@ test('install uses persistent tarballs, activates bundles once, and keeps backup
   assert.equal(readdirSync(ctx.packagesDir).filter(name => name.endsWith('.tgz')).length, 3);
   assert.equal(existsSync(join(ctx.backupRoot, 'profile', 'package.json')), true);
   assert.equal(existsSync(join(ctx.backupRoot, 'installed', 'dscord', 'package.json')), true);
+  const calls = readFileSync(ctx.log, 'utf8');
+  assert.ok(calls.includes('"pnpm":["approve","dsh-plugin-bot-issue","--yes"]'), '事务自带的 issue-workflow skill 必须被明确批准');
 
   const second = runInstall(ctx);
   assert.equal(second.status, 0, second.stderr);
