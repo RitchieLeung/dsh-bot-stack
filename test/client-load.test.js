@@ -128,3 +128,11 @@ test('apply registers the sidebar entry and the main panel', () => {
   }
   for (const cleanup of cleanups) cleanup();
 });
+
+test('client.js 声明手机断点与 Bot 列表抽屉', () => {
+  // 手机上市面上固定的 220px 侧栏会挤掉正文，必须变成抽屉 + 遮罩 + ☰ 开关。
+  assert.match(SOURCE, /@media\s*\(max-width:\s*768px\)/, '必须有手机断点');
+  assert.match(SOURCE, /data-open/, '抽屉开合标记');
+  assert.match(SOURCE, /bk-scrim/, '抽屉遮罩');
+  assert.match(SOURCE, /bk-nav-btn/, '☰ 开关按钮');
+});
