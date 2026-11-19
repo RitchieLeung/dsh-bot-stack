@@ -230,7 +230,7 @@ export class WorkCore {
       : (this.origin || this.askedOrigin());
     // Work needs a message to answer. A turn the native host resumed on its own after a
     // restart has none, and must not quietly redo work the restart left unknown.
-    if (!origin) return '现在没有要回复的消息，不能派工。宿主重启后结果不确定的任务不会自动重做；对方要重做时会再发消息。';
+    if (!origin) return '现在没有要回复的消息，不能派工。若这是事务（issue）上的工作，派工时带上 issueId，结果会由事务模块写回该事务；宿主重启后结果不确定的任务不会自动重做；对方要重做时会再发消息。';
     const task = this.state.tasks[id] = { id, title, brief, ...(deliverables ? { deliverables: String(deliverables) } : {}),
       ...(audience ? { audience: String(audience).trim().slice(0, 500) } : {}), ...(plain === true ? { plain: true } : {}),
       origin, inputFiles: origin?.files || [], createdAt: new Date().toISOString(), notified: false, toolCalls: 0 };

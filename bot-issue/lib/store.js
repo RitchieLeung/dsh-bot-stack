@@ -596,7 +596,11 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     }
     const row = requireIssue(id);
     if (terminal) {
-      const handler = typeof workerName === 'string' && workerName.trim() ? workerName.trim() : null;
+      // A worker session has no Bot identity of its own; the result belongs to the
+      // issue's assignee, so the timeline still shows who did the work.
+      const handler = typeof workerName === 'string' && workerName.trim()
+        ? workerName.trim()
+        : (typeof row.assigneeName === 'string' && row.assigneeName.trim() ? row.assigneeName.trim() : null);
       if (ACTIVE_STATUSES.includes(row.status)) {
         setStatusUnchecked(id, issueStatusForTask(status), handler || '系统');
       }

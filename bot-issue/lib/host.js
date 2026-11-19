@@ -453,13 +453,15 @@ export function apply(ctx, config = {}) {
       needVision
         ? '3. ⚠️ 这条事务带图片：**必须挑能看图的同事**（list_bot_models 里 "reads images" 的）。挑错了它看不到图，会闭环回来找你重派。'
         : '3. 按事务内容挑最合适的（专才优先、负载低的优先）。',
-      `4. 用 message_bot 把任务交给它（reply_to 默认 me，when 现在）。message 要自包含（对方看不到这里），写明：事务 ${issue.id}：${issue.title}；任务说明（见下方正文）；做完用 issue_comment 写结果 + issue_update 推进到 in_review；做不了/看不到图就 issue_comment 说明 + message_bot 找你，不要标待验收假装完成。`,
+      `4. 用 message_bot 把任务交给它（reply_to 默认 me，when 现在）。message 要自包含（对方看不到这里），写明：事务 ${issue.id}：${issue.title}；任务说明（见下方正文）；做完用 issue_comment 写结果 + issue_update 推进到 in_review；要动手（跑命令/读仓库/连库）时用 dispatch_work 并带 issueId=${issue.id}，工作者结果会自动写回本事务；做不了/看不到图就 issue_comment 说明 + message_bot 找你，不要标待验收假装完成。`,
       attachments.length
         ? `5. 附件已放到共享工作区，把这几个本地路径写进 message（对方用 read_image 读路径才能看到图，只看 /api/... URL 看不到）：\n${attachments.map(a => `   - ${a.path}（${a.name}）`).join('\n')}`
         : null,
       '6. 用 issue_assign 记录执行人：issue_assign(事务 id, 对方名字)。',
       '7. 如果对方做不了/看不到图，它会闭环回来找你 → 你改派（issue_assign 换人）或拆子事务（issue_create 带 parentId）再派。',
-      '注意：不要用 dispatch_work / subagent / product_delegate —— 那些是你自己的下属，不是同事。',
+      '注意两条路别混：**交接给同事**只走 message_bot + issue_assign；**要动手**（跑命令/读文件/连库）才用 dispatch_work，',
+      `并且必须带 issueId=${issue.id}——它起的是有完整工具的工作者，不是同事，结果会自动写回本事务。前台直接跑命令会被拦。`,
+      '验收时你自己也没有前台 shell：要核验就派一个带 issueId 的复核任务，拿它的证据（EXPLAIN、日志、行数）判断是否通过。',
       '回复用户时，说「我按专才+负载挑了 X」，不要说「你指定的」——是你自己挑的。',
       '--- 事务正文 ---',
       issue.body || '（无正文）',
@@ -864,7 +866,20 @@ export function apply(ctx, config = {}) {
   // Dispatched issues close themselves: sweep the dscord node ledger without
   // waiting for the Bot's next turn.
   ctx.effect(() => {
-    const handle = startWriteback({ store, nodesRoot, intervalMs: writebackIntervalMs, workerNameOf: nameOf });
+    const handle = startWriteback({
+      store,
+      nodesRoot,
+      intervalMs: writebackIntervalMs,
+      workerNameOf: nameOf,
+      // A worker finished: the issue moved to 待验收 on its own, so somebody has to
+      // look. The main Bot owns verification, so ping it (the worker is not a Bot).
+      onSettle: ({ issueId }) => {
+        try {
+          const full = store().get(issueId);
+          notifyCounterpart(full, full?.assignee?.sessionId || null, '执行人的工作者已交回结果（证据在时间线里），需要你验收');
+        } catch { /* best effort */ }
+      },
+    });
     return () => handle.stop();
   }, 'bot-issue: writeback');
 

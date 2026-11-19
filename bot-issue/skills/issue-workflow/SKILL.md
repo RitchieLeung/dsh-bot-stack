@@ -32,6 +32,9 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 5. 执行人交结果（in_review）后 `issue_get` 读结果并**实测验收**：测试通过 → 用 `issue_comment` 写明
    「测试通过，请求用户闭环」，事务停在 `in_review` 等用户点 `done`；测试不通过 → `issue_update` 到
    `dispatched` 并带 `rejection`（打回意见）。**主 Bot 不能自己点 done**，那是用户的动作。
+   - **要动手核验时**（跑命令、连库、读仓库）：你自己也没有前台 shell，跑命令会报「前台不直接做这件事」。
+     用 `dispatch_work` 派一个复核任务，`issueId` 填事务 id——复核结果会写回本事务，你拿它的证据
+     （EXPLAIN、日志、行数）判断通不通过，并写清楚依据。不要跳过核验直接说「应该没问题」。
 6. **遇到问题要闭环**：执行人说忙/做不了/看不到图时会回来找你。你**改派**（`issue_assign` 换人）
    或**拆子事务**（`issue_create(parentId=…)`）再派。
 7. **多执行人任务**（「每个 bot / 各自 / 大家」这类）：拆成每个 bot 一条子事务（`issue_create(parentId=…)`），
@@ -42,12 +45,16 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 1. 接到 `message_bot` 的事务任务后，`issue_get` 读全文和附件，自己处理。
    **图片/附件**：主 Bot 会给你附件的本机文件路径（在共享工作区里），用 `read_image` 读那个本地文件
    （不是拿 `/api/...` 链接），才能看到图。
-2. 过程中有发现/结论，用 `issue_comment` 写进时间线（会同步给主 Bot）。
-3. 做完了：`issue_comment` 写结果/结论，再 `issue_update` 把状态推进到 `in_review`（待验收）——
+2. **要动手时（跑命令、读仓库、连库、跑测试）**：你的前台没有 shell——直接跑会报「前台不直接做这件事」。
+   用 `dispatch_work`，**`issueId` 必须填事务 id**（`I-xxxx`，事务里能看到）：工作者有完整工具，
+   结果由事务模块自动写回本事务、并把你推进到「待验收」。只在真需要工具时用；写评论、读事务、推进状态
+   仍用 `issue_*`。不带 `issueId` 会报「现在没有要回复的消息，不能派工」——那是缺任务归属，不是通道坏了。
+3. 过程中有发现/结论，用 `issue_comment` 写进时间线（会同步给主 Bot）。
+4. 做完了：`issue_comment` 写结果/结论，再 `issue_update` 把状态推进到 `in_review`（待验收）——
    这一步会**自动知会主 Bot 来验收**。之后等主 Bot 验收，不要自己改 done。
-4. 做不了 / 正忙 / 任务太大 / 看不到图（`read_image` 报 does not declare image input）：
+5. 做不了 / 正忙 / 任务太大 / 看不到图（`read_image` 报 does not declare image input）：
    **不要标待验收假装完成**。用 `issue_comment` 说明原因，再用 `message_bot` 找主 Bot 改派或拆任务。
-5. 你（执行人）只能推进到 `in_review`；`done` 只有用户能点，主 Bot 也点不了（会被拒）。
+6. 你（执行人）只能推进到 `in_review`；`done` 只有用户能点，主 Bot 也点不了（会被拒）。
 
 ## 评论同步
 
@@ -83,7 +90,8 @@ description: 事务（issue）工作流规则。每个 Bot 接到或参与事务
 
 ## 注意
 
-- 用 `message_bot` 和同事协作；不要用 dispatch_work / subagent / product_delegate 把事务
-  派给自己的下属或子 agent——那些不是同事，落到它们手上事务就闭环不回来了。
+- 两条路别混：**把事务交给同事**只走 `message_bot` + `issue_assign`，不要用 `dispatch_work` /
+  `subagent` / `product_delegate` 顶替同事——那些不是同事。**要动手**才用 `dispatch_work`，
+  并且必须带上 `issueId`，结果会自动写回事务。
 - 事务工具（`issue_*`）偶尔报 unknown tool 或角色守卫拦截时，别用 dispatch_work 装样子派出去，
   在群里说明「事务工具当前不可用」并停下，等修好再领。

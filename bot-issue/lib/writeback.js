@@ -33,8 +33,10 @@ function resultText(task) {
  * @param intervalMs - sweep period; defaults to 15s.
  * @returns a handle whose `stop()` clears the timer.
  */
-export function startWriteback({ store, nodesRoot, intervalMs = 15_000, workerNameOf = null }) {
+export function startWriteback({ store, nodesRoot, intervalMs = 15_000, workerNameOf = null, onSettle = null }) {
   const resolve = () => (typeof store === 'function' ? store() : store);
+  // A settled task is announced once; the ledger keeps it forever, the sweep repeats.
+  const announced = new Set();
 
   const tick = () => {
     let hosts = [];
@@ -59,16 +61,22 @@ export function startWriteback({ store, nodesRoot, intervalMs = 15_000, workerNa
         if (typeof issueId !== 'string' || !issueId) continue;
         if (!ACTIVE_TASK.has(task.status) && !TERMINAL_TASK.has(task.status)) continue;
         const workerSessionId = typeof task.sessionId === 'string' ? task.sessionId : null;
+        const workerName = (workerNameOf && workerSessionId) ? workerNameOf(workerSessionId) : null;
         try {
           resolve().syncTask(issueId, {
             taskId: task.id,
             workerSessionId,
             status: task.status,
             resultText: resultText(task),
-            workerName: (workerNameOf && workerSessionId) ? workerNameOf(workerSessionId) : null,
+            workerName,
           });
         } catch {
           // A task whose issue is gone or already closed is not fatal; the next sweep retries.
+          continue;
+        }
+        if (onSettle && TERMINAL_TASK.has(task.status) && !announced.has(task.id)) {
+          announced.add(task.id);
+          try { onSettle({ issueId, taskId: task.id, status: task.status, workerName, resultText: resultText(task) }); } catch { /* best effort */ }
         }
       }
     }
