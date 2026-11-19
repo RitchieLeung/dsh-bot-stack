@@ -314,7 +314,9 @@ export class WorkCore {
     const before = defaults?.currentSelection?.();
     const applied = await this.ctx.sessionController.selectModel({ sessionId, provider: ref.slice(0, ref.indexOf('/')), model: ref.slice(ref.indexOf('/') + 1) });
     if (before?.provider && before?.model) await defaults.saveSelection(before).catch(() => {});
-    return applied;
+    // The session controller reports `{ selected: { provider, model } }`; older builds returned
+    // the pair itself. Normalize so the caller's "same model as the Bot" check keeps working.
+    return applied?.selected ?? applied;
   }
 
   /** queue starts or follows a turn; steer cuts into the running turn at its next step. */
