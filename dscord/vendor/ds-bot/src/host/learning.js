@@ -1,17 +1,24 @@
-// Modified by DSCord: join canceled native memory model calls during shutdown.
-// Learning from work. After a long turn a Bot's chat is marked for review. When the
-// team has been idle for a while, and at most every few hours, one background pass
-// reads what was said since the last pass and asks whether it taught a skill worth
-// keeping or a lasting project rule. Most work teaches nothing, so most passes
-// propose nothing. A proposal waits as a card in the Bot's chat until approved, and
-// declined changes are remembered so the same idea does not come back.
+// Modified by DSCord: join canceled native memory model calls during shutdown,
+// and replace blind 3-minute / 12-hour sweeps with explicit MCP-driven retrospectives.
 import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { access, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { replaceFile } from './files.js'
 import { looksLikeKey, looksSecret, writtenIn } from './memory.js'
 import { validateCapabilityName } from './capabilities.js'
+import {
+  RETROSPECT_TOOL_NAME,
+  SKILL_RETROSPECT_DESCRIPTION,
+  SKILL_RETROSPECT_PARAMETERS,
+  buildRetrospectLines,
+  evaluateRetrospectGate,
+  normalizeRetrospectArgs,
+  readIssueEvidence,
+} from './skill-retrospect.js'
+
+const toolOutput = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] }
 
 export const LEARNING = {
   minTurnMs: 3 * 60_000,
@@ -300,7 +307,14 @@ export function install(rt) {
   const on = config.learning !== false && config.memory !== false
   const view = () => ({})
   if (!on) {
-    Object.assign(rt, { learningView: view, learningSettledView: view, learningEndpoint: async () => { throw new Error('Learning is turned off on this host') }, learningRun: async () => 0 })
+    Object.assign(rt, {
+      learningView: view,
+      learningSettledView: view,
+      learningEndpoint: async () => { throw new Error('Learning is turned off on this host') },
+      learningRun: async () => 0,
+      retrospectSkill: async () => '当前宿主已关闭学习功能。',
+      evaluateRetrospectGate,
+    })
     return
   }
 
@@ -343,32 +357,11 @@ export function install(rt) {
     return writing
   }
 
-  // A turn in a Bot's own chat that ran long marks the chat for the next pass.
-  const started = new Map()
-  const noted = new Map()
-  let lastActivity = Date.now()
-  ctx.on('agent/status', ({ agent, status }) => {
-    if (stopped) return
-    const id = agent?.id
-    if (id === undefined || !rt.isBotSession(id)) return
-    lastActivity = Date.now()
-    if (status !== 'idle') {
-      if (!started.has(id)) started.set(id, Date.now())
-      return
-    }
-    const since = started.get(id)
-    started.delete(id)
-    const botId = rt.chatOwners.get(id)
-    if (since === undefined || botId === undefined || Date.now() - since < settings.minTurnMs) return
-    const pending = data().pending
-    pending[botId] = [...new Set([...(pending[botId] ?? []), id])]
-    noted.set(id, (noted.get(id) ?? 0) + 1)
-    void persist()
-  })
-
+  // Blind 3-minute turn queueing is intentionally removed; retrospectives are
+  // actively requested by Bots via skill_retrospect when warranted.
   // After the text budget, keep scanning to the cursor for user corrections.
-  async function linesSince(sessionId) {
-    const cursor = data().cursors[sessionId]
+  async function linesSince(sessionId, { ignoreCursor = false, maxBudget = settings.textMax } = {}) {
+    const cursor = ignoreCursor ? undefined : data().cursors[sessionId]
     const kept = []
     const userLines = []
     const keptRecords = []
@@ -377,11 +370,13 @@ export function install(rt) {
     let userUsed = 0
     let overBudget = false
     let through
-    for await (const line of rt.partLines(sessionId, AbortSignal.timeout(settings.readMs), { pages: Infinity })) {
+    const group = rt.groupOwners?.get?.(sessionId) !== undefined
+    for await (const line of rt.partLines(sessionId, AbortSignal.timeout(settings.readMs), { group, pages: Infinity })) {
+      if (stopped) break
       through ??= line.seq
       if (cursor !== undefined && line.seq <= cursor) break
       const text = clip(line.text, line.who === 'user' ? settings.userLineMax : settings.botLineMax)
-      if (!overBudget && used + text.length <= settings.textMax) {
+      if (!overBudget && used + text.length <= maxBudget) {
         kept.push(text)
         keptRecords.push({ text, time: line.time })
         used += text.length
@@ -397,11 +392,29 @@ export function install(rt) {
     return { lines: [...kept, ...userLines].reverse(), work: [...keptRecords, ...userRecords].reverse(), through }
   }
 
+  async function collectRetrospectChatLines(sessions) {
+    const unique = [...new Set(sessions.filter(Boolean))]
+    const read = []
+    for (const sessionId of unique) {
+      if (stopped) break
+      read.push({ sessionId, ...await linesSince(sessionId) })
+    }
+    let chatLines = read.flatMap(entry => entry.lines)
+    if (!stopped && chatLines.length === 0 && unique.length > 0) {
+      for (const sessionId of unique) {
+        if (stopped) break
+        const recent = await linesSince(sessionId, { ignoreCursor: true, maxBudget: Math.min(8_000, settings.textMax) })
+        chatLines.push(...recent.lines)
+      }
+    }
+    return { chatLines, read }
+  }
+
   const skillsOf = () => Object.fromEntries(Object.entries(state.capabilities?.items ?? {}).filter(([, item]) => item.kind === 'skill'))
   const learnedOf = bot => (data().learned[bot.id] ?? []).filter(name => skillsOf()[name] !== undefined && (bot.capabilities ?? []).includes(name))
   const waitingFor = botId => Object.values(data().proposals).filter(entry => entry.botId === botId)
 
-  async function reviewSkill(bot, lines) {
+  async function evaluateSkillProposal(bot, lines, { signal } = {}) {
     const skills = skillsOf()
     const learned = learnedOf(bot)
     const library = Object.values(skills).filter(item => !learned.includes(item.name)).map(item => ({ name: item.name, description: item.description }))
@@ -414,38 +427,50 @@ export function install(rt) {
       language: writtenIn(lines.filter(line => line.startsWith('User: ')).map(line => line.slice(6)), rt.uiLanguage?.()),
       limit: settings.learnedMax,
     })
-    const reply = await rt.botShot(bot, skillSystem(), text, { sessionId: rt.chatOf(bot.id), kind: 'memory' })
+    const signals = [signal, rt.memoryLifecycleSignal].filter(Boolean)
+    const callSignal = signals.length === 0 ? undefined : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+    const reply = await rt.botShot(bot, skillSystem(), text, { sessionId: rt.chatOf(bot.id), kind: 'memory', ...(callSignal ? { signal: callSignal } : {}) })
     const proposal = parseJson(reply)
     if (['description', 'content', 'why'].some(key => {
       const value = proposal?.[key]
-      return typeof value === 'string' && rt.redactSecrets(value) !== value
+      return typeof value === 'string' && (rt.redactSecrets?.(value) ?? value) !== value
     })) {
       rt.warn('ds-bot: the skill review of %s proposed content containing a saved secret', bot.name)
-      return undefined
+      return { status: 'rejected', reason: '提案内容包含疑似密钥/敏感信息，已被安全策略拦截。' }
     }
     const problem = skillProblem(proposal, { skills, learned, limit: settings.learnedMax })
     if (problem !== undefined) {
       rt.warn('ds-bot: the skill review of %s proposed nothing usable: %s', bot.name, problem)
-      return undefined
+      return { status: 'rejected', reason: `提案未通过格式/去重检查：${problem}` }
     }
-    if (proposal.action === 'none') return undefined
+    if (proposal.action === 'none') {
+      return { status: 'none', reason: typeof proposal.reason === 'string' ? proposal.reason.trim() : '复盘认为暂不需要固化为新 Skill。' }
+    }
     const name = proposal.name.trim()
     const previous = proposal.action === 'update' ? skills[name] : undefined
     return {
-      id: randomUUID(),
-      kind: 'skill',
-      action: proposal.action,
-      botId: bot.id,
-      at: Date.now(),
-      name,
-      description: proposal.description.trim(),
-      content: proposal.content.trim(),
-      why: typeof proposal.why === 'string' ? clip(proposal.why.trim(), 300) : '',
-      ...(previous ? {
-        previous: { description: previous.description, content: previous.content },
-        base: hashOf(`${previous.description}\n${previous.content}`),
-      } : {}),
+      status: 'created',
+      proposal: {
+        id: randomUUID(),
+        kind: 'skill',
+        action: proposal.action,
+        botId: bot.id,
+        at: Date.now(),
+        name,
+        description: proposal.description.trim(),
+        content: proposal.content.trim(),
+        why: typeof proposal.why === 'string' ? clip(proposal.why.trim(), 300) : '',
+        ...(previous ? {
+          previous: { description: previous.description, content: previous.content },
+          base: hashOf(`${previous.description}\n${previous.content}`),
+        } : {}),
+      },
     }
+  }
+
+  async function reviewSkill(bot, lines, opts) {
+    const result = await evaluateSkillProposal(bot, lines, opts)
+    return result.status === 'created' ? result.proposal : undefined
   }
 
   async function reviewAgents(bot, folder, current, lines) {
@@ -539,7 +564,6 @@ export function install(rt) {
         }
         if (waitingFor(botId).length > 0) continue
         const sessions = [...pendingSessions]
-        const notedAtStart = new Map(sessions.map(sessionId => [sessionId, noted.get(sessionId)]))
         try {
           const read = []
           for (const sessionId of sessions) read.push({ sessionId, ...await linesSince(sessionId) })
@@ -567,10 +591,7 @@ export function install(rt) {
             }
           }
           for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
-          const remaining = (store.pending[botId] ?? []).filter(sessionId =>
-            !notedAtStart.has(sessionId) || noted.get(sessionId) !== notedAtStart.get(sessionId))
-          if (remaining.length === 0) delete store.pending[botId]
-          else store.pending[botId] = remaining
+          delete store.pending[botId]
         } catch (error) {
           rt.warn('ds-bot: the learning review of %s failed: %s', bot.name, error?.message ?? error)
           continue
@@ -635,28 +656,68 @@ export function install(rt) {
     return running
   }
 
-  const due = () => {
-    if (stopped) return false
-    const store = data()
-    const hasPending = Object.values(store.pending).some(sessions => sessions.length > 0)
-      || (config.agentsMd !== false && Object.values(store.agentsPending).some(queue => queue.records?.length > 0))
-    if (!hasPending || rt.readOnly() !== undefined) return false
-    if (Object.keys(rt.workView()).length > 0 || Date.now() - lastActivity < settings.idleMs) return false
-    return store.lastRun === undefined || Date.now() - store.lastRun >= settings.intervalMs
-  }
-  ctx.effect(() => {
-    const timer = setInterval(() => {
-      if (due()) void run().catch(error => rt.warn('ds-bot: learning pass failed: %s', error?.message ?? error))
-    }, settings.tickMs)
-    timer.unref?.()
-    return () => {
-      stopped = true
-      clearInterval(timer)
-      // Native memory stops every outstanding model call during teardown. Join
-      // its consumer before another owner can reuse this learning state.
-      return rt.memoryLifecycleSignal === undefined ? writing : Promise.allSettled([running]).then(() => writing)
+  const inFlightBots = new Set()
+  const activeRetrospects = new Set()
+
+  /** Active MCP entry point: Bot initiates a targeted retrospect after task completion. */
+  async function retrospectSkill({ botId, sessionId, args, signal } = {}) {
+    await rt.load?.()
+    if (stopped) return '宿主正在关闭，暂不能发起复盘。'
+    if (rt.readOnly() !== undefined) return '当前宿主处于只读状态，不能生成学习提案。'
+    const bot = rt.botOf(botId)
+    if (bot === undefined) return '当前会话未绑定有效 Bot，不能发起复盘。'
+
+    const normalized = normalizeRetrospectArgs(args)
+    if (!normalized.ok) return `未发起复盘：${normalized.error}`
+
+    if (inFlightBots.has(bot.id)) {
+      return '未发起复盘：当前 Bot 已有复盘正在进行中，请等待完成或稍候。'
     }
-  }, 'ds-bot: learning')
+
+    const store = data()
+    const { triggerType, summary, issueId, focusSkill } = normalized.value
+    const issueEvidence = readIssueEvidence({ home, issueId })
+    inFlightBots.add(bot.id)
+    const task = (async () => {
+      try {
+        const gate = await evaluateRetrospectGate({ rt, bot, waitingProposals: waitingFor(bot.id), args: normalized.value, issueEvidence })
+        if (stopped) return '宿主正在关闭，已取消本次复盘。'
+        if (!gate.allow) return `未发起复盘：${gate.reason}`
+
+        const { chatLines, read } = await collectRetrospectChatLines([sessionId, rt.chatOf(bot.id)])
+        if (stopped) return '宿主正在关闭，已取消本次复盘。'
+        const evidenceLines = buildRetrospectLines({ triggerType, summary, issueEvidence, chatLines, focusSkill })
+        const result = await evaluateSkillProposal(bot, evidenceLines, { signal })
+        if (stopped) return '宿主正在关闭，复盘结果未落盘。'
+
+        for (const entry of read) if (entry.through !== undefined) store.cursors[entry.sessionId] = entry.through
+
+        if (result.status === 'created') {
+          store.proposals[result.proposal.id] = result.proposal
+          await persist()
+          return `已生成 Skill 审批卡「${result.proposal.name}」（${result.proposal.action}）：${result.proposal.description}。原因：${result.proposal.why || summary}。请等待用户在界面点击同意或拒绝后才会生效。`
+        }
+        await persist()
+        if (result.status === 'none') return `复盘未生成新 Skill：${result.reason}`
+        return `复盘未能生成可用 Skill：${result.reason}`
+      } finally {
+        inFlightBots.delete(bot.id)
+      }
+    })()
+    activeRetrospects.add(task)
+    try {
+      return await task
+    } finally {
+      activeRetrospects.delete(task)
+    }
+  }
+
+  // No background setInterval sweep: only join in-flight learning work at shutdown.
+  ctx.effect(() => () => {
+    stopped = true
+    const pending = [...(rt.memoryLifecycleSignal === undefined ? [] : [running]), ...activeRetrospects]
+    return pending.length === 0 ? writing : Promise.allSettled(pending).then(() => writing)
+  }, 'ds-bot: learning shutdown')
 
   // The user's answer to a card.
   async function answer({ id, approve }) {
@@ -797,5 +858,18 @@ export function install(rt) {
     return result
   }
 
-  Object.assign(rt, { learningView, learningSettledView, learningEndpoint, learningRun: run })
+  ;(rt.teamTools ??= []).push(defineTool({
+    name: RETROSPECT_TOOL_NAME,
+    description: SKILL_RETROSPECT_DESCRIPTION,
+    parameters: SKILL_RETROSPECT_PARAMETERS,
+    output: toolOutput,
+    async execute(args, exec) {
+      const sessionId = exec?.agent?.id
+      const botId = sessionId === undefined ? undefined : rt.selfOf(sessionId)
+      if (botId === undefined) return '无法识别当前 Bot 身份，不能发起复盘。'
+      return retrospectSkill({ botId, sessionId, args, signal: exec?.signal })
+    },
+  }))
+
+  Object.assign(rt, { learningView, learningSettledView, learningEndpoint, learningRun: run, retrospectSkill, evaluateRetrospectGate })
 }

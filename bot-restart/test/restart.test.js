@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildRelaunchPlan, describeStatus, humanUptime, portOf, publicUrlOf, readMarker, supervisorMode } from '../lib/restart.js';
+import { buildRelaunchPlan, describeStatus, humanUptime, portOf, publicUrlOf, readMarker, resolvePort, resolvePublicUrl, supervisorMode } from '../lib/restart.js';
 import { createRestartService } from '../lib/service.js';
 
 const ARGV = ['/usr/bin/node', '/opt/dsh/bin/dsh', 'web', '--no-open', '--port', '3080', '--public-url', 'https://dsh.example.com'];
@@ -153,6 +153,29 @@ test('reload calls HMR inside runExclusive, and reports when HMR is missing', as
 
   const bare = makeService({ ctx: { get: () => null } }).service;
   await assert.rejects(() => bare.reload(), err => err.code === 'HMR_UNAVAILABLE');
+});
+
+test('service prefers runtime webServer.port and webApp URL when argv omits --port', () => {
+  assert.equal(resolvePort({ webServer: { port: 3082 }, argv: ['node', 'dsh', 'web'] }), 3082);
+  assert.equal(resolvePublicUrl({ webApp: { getAdvertisedUrl: () => 'https://dsh.example.com/' }, argv: ['node', 'dsh', 'web'] }), 'https://dsh.example.com/');
+
+  const services = {
+    webServer: { port: 3082 },
+    webApp: { getAdvertisedUrl: () => 'https://dsh.example.com/' },
+  };
+  const { service, state } = makeService({
+    argv: ['/usr/bin/node', '/opt/dsh/bin/dsh', 'web', '--no-open'],
+    ctx: { get: name => services[name] || null },
+  });
+
+  const st = service.status();
+  assert.equal(st.port, 3082);
+  assert.equal(st.publicUrl, 'https://dsh.example.com/');
+
+  const res = service.restart({ by: 'panel' });
+  assert.equal(res.port, 3082);
+  const payload = JSON.parse(state.spawned[0].args[1]);
+  assert.equal(payload.port, 3082);
 });
 
 test('reload falls back to pluginManager when HMR is absent', async () => {

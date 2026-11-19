@@ -13,6 +13,22 @@ import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
 export const STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'done', 'failed', 'cancelled'];
+export const EDITABLE_PRIORITY_STATUSES = new Set(['open', 'discussing']);
+export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+export const DEFAULT_PRIORITY = 'P2';
+export const PRIORITY_LABELS = { P0: 'P0 紧急', P1: 'P1 高', P2: 'P2 中', P3: 'P3 低' };
+const PRIORITY_ORDER = "CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 WHEN 'P3' THEN 3 ELSE 2 END ASC";
+
+export function normalizePriority(input, { fallback = DEFAULT_PRIORITY } = {}) {
+  if (input === undefined || input === null || input === '') {
+    if (fallback !== null) return fallback;
+    throw failure('INVALID_PRIORITY', '紧急程度只能是 P0、P1、P2、P3');
+  }
+  if (typeof input !== 'string') throw failure('INVALID_PRIORITY', '紧急程度只能是 P0、P1、P2、P3');
+  const clean = input.trim().toUpperCase();
+  if (!PRIORITIES.includes(clean)) throw failure('INVALID_PRIORITY', '紧急程度只能是 P0、P1、P2、P3');
+  return clean;
+}
 /** Human-facing names: everything written for people (comments, messages) uses these. */
 export const STATUS_LABELS = {
   open: '待处理',
@@ -70,6 +86,8 @@ const TRANSITIONS = {
 };
 
 const VALID_KINDS = new Set(['user', 'agent', 'system']);
+/** 只有实质内容条目（普通评论、结果、打回意见）才允许回复；系统状态/指派流转不参与对话。 */
+export const canReplyComment = entry => Boolean(entry && entry.kind !== 'status' && entry.kind !== 'assign');
 
 function failure(code, message) {
   const error = new Error(message);
@@ -84,12 +102,14 @@ const now = () => Date.now();
 
 function issueFrom(row) {
   if (!row) return null;
+  const priority = typeof row.priority === 'string' && PRIORITIES.includes(row.priority) ? row.priority : DEFAULT_PRIORITY;
   return {
     id: row.id,
     number: typeof row.number === 'number' ? row.number : null,
     title: row.title,
     body: row.body,
     status: row.status,
+    priority,
     parentId: row.parentId || null,
     type: row.type || null,
     createdBy: row.createdBy,
@@ -126,6 +146,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       title         TEXT NOT NULL,
       body          TEXT NOT NULL DEFAULT '',
       status        TEXT NOT NULL DEFAULT 'open',
+      priority      TEXT NOT NULL DEFAULT 'P2',
       parentId      TEXT,
       type          TEXT,
       createdBy     TEXT NOT NULL,
@@ -140,13 +161,15 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       assignedAt    INTEGER
     );
     CREATE TABLE IF NOT EXISTS comments (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      issueId    TEXT NOT NULL,
-      authorKind TEXT NOT NULL DEFAULT 'user',
-      authorName TEXT NOT NULL DEFAULT '',
-      body       TEXT NOT NULL,
-      kind       TEXT NOT NULL DEFAULT 'comment',
-      at         INTEGER NOT NULL
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      issueId         TEXT NOT NULL,
+      authorKind      TEXT NOT NULL DEFAULT 'user',
+      authorName      TEXT NOT NULL DEFAULT '',
+      authorSessionId TEXT,
+      body            TEXT NOT NULL,
+      kind            TEXT NOT NULL DEFAULT 'comment',
+      replyToId       INTEGER,
+      at              INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_comments_issue ON comments (issueId, at);
     CREATE TABLE IF NOT EXISTS dispatches (
@@ -207,7 +230,13 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
   if (!existingCols.includes('assigneeSessionId')) db.exec('ALTER TABLE issues ADD COLUMN assigneeSessionId TEXT');
   if (!existingCols.includes('assigneeName')) db.exec('ALTER TABLE issues ADD COLUMN assigneeName TEXT');
   if (!existingCols.includes('assignedAt')) db.exec('ALTER TABLE issues ADD COLUMN assignedAt INTEGER');
+  if (!existingCols.includes('priority')) db.exec("ALTER TABLE issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_number ON issues(number)');
+
+  // Migration: 评论表支持回复指定评论（replyToId）和作者会话标识（authorSessionId）。
+  const commentCols = db.prepare('PRAGMA table_info(comments)').all().map(col => col.name);
+  if (!commentCols.includes('authorSessionId')) db.exec('ALTER TABLE comments ADD COLUMN authorSessionId TEXT');
+  if (!commentCols.includes('replyToId')) db.exec('ALTER TABLE comments ADD COLUMN replyToId INTEGER');
 
   // Migration: early boards wrote status comments with raw ids (状态：open → dispatched).
   // Rewrite them once so the timeline reads the same everywhere (panel, tools, exports).
@@ -230,15 +259,25 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     'INSERT INTO attachments (id, issueId, name, mime, bytes, createdAt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING');
 
   const insertIssue = db.prepare(`
-    INSERT INTO issues (id, number, title, body, status, parentId, type, createdBy, createdByName, version, createdAt, updatedAt, closedAt, result)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, NULL)`);
+    INSERT INTO issues (id, number, title, body, status, priority, parentId, type, createdBy, createdByName, version, createdAt, updatedAt, closedAt, result)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, NULL)`);
   const selectIssue = db.prepare('SELECT * FROM issues WHERE id = ?');
   const selectIssueByNumber = db.prepare('SELECT * FROM issues WHERE number = ?');
   const nextNumber = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM issues');
-  const selectChildren = db.prepare('SELECT * FROM issues WHERE parentId = ? ORDER BY createdAt ASC');
+  const selectChildren = db.prepare(`SELECT * FROM issues WHERE parentId = ? ORDER BY ${PRIORITY_ORDER}, createdAt ASC`);
   const insertComment = db.prepare(
-    'INSERT INTO comments (issueId, authorKind, authorName, body, kind, at) VALUES (?, ?, ?, ?, ?, ?)');
+    'INSERT INTO comments (issueId, authorKind, authorName, authorSessionId, body, kind, replyToId, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   const selectComments = db.prepare('SELECT * FROM comments WHERE issueId = ? ORDER BY at ASC, id ASC');
+  const selectCommentById = db.prepare('SELECT * FROM comments WHERE id = ?');
+  const selectUserReplies = db.prepare(`
+    SELECT c.id, c.issueId, i.number AS issueNumber, i.title AS issueTitle,
+           c.authorKind, c.authorName, c.body, c.at
+    FROM comments c
+    JOIN comments p ON p.id = c.replyToId
+    JOIN issues i ON i.id = c.issueId
+    WHERE p.authorKind = 'user' AND c.authorKind <> 'user'
+    ORDER BY c.id DESC
+    LIMIT ?`);
   const selectDispatches = db.prepare('SELECT * FROM dispatches WHERE issueId = ? ORDER BY at ASC, id ASC');
   const selectDispatchByTask = db.prepare('SELECT * FROM dispatches WHERE taskId = ?');
   const insertDispatch = db.prepare(
@@ -334,15 +373,42 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
 
   const depRef = row => ({ id: row.id, number: row.number, title: row.title, status: row.status });
 
+  function commentPreview(text, max = 80) {
+    const clean = String(text || '')
+      .replace(/!\[[^\]]*\]\([^)]+\)/g, '[图片]')
+      .replace(STATUS_WORD_RE, word => STATUS_LABELS[word] || word)
+      .replace(/\s+/g, ' ')
+      .trim();
+    return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+  }
+
+  function replySummary(row) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      authorKind: row.authorKind,
+      authorName: row.authorName,
+      authorSessionId: row.authorSessionId || null,
+      kind: row.kind,
+      at: row.at,
+      preview: commentPreview(row.body),
+    };
+  }
+
   function getFull(id) {
     const issue = issueFrom(requireIssue(id));
-    const comments = selectComments.all(issue.id).map(row => ({
+    const rows = selectComments.all(issue.id);
+    const byId = new Map(rows.map(row => [row.id, row]));
+    const comments = rows.map(row => ({
       id: row.id,
       issueId: row.issueId,
       authorKind: row.authorKind,
       authorName: row.authorName,
+      authorSessionId: row.authorSessionId || null,
       body: row.body,
       kind: row.kind,
+      replyToId: row.replyToId ?? null,
+      replyTo: row.replyToId ? replySummary(byId.get(row.replyToId)) : null,
       at: row.at,
     }));
     const dispatches = selectDispatches.all(issue.id).map(row => ({
@@ -366,7 +432,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     };
   }
 
-  function list({ status, parentId, type, query, limit = 50, offset = 0 } = {}) {
+  function list({ status, parentId, type, priority, query, limit = 50, offset = 0 } = {}) {
     let rows;
     if (parentId !== undefined && parentId !== null) {
       rows = selectChildren.all(requireIssue(parentId).id);
@@ -376,6 +442,13 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       if (status && STATUSES.includes(status)) {
         clauses.push('status = ?');
         params.push(status);
+      }
+      if (typeof priority === 'string' && priority.trim()) {
+        const cleanPriority = priority.trim().toUpperCase();
+        if (PRIORITIES.includes(cleanPriority)) {
+          clauses.push('priority = ?');
+          params.push(cleanPriority);
+        }
       }
       if (typeof query === 'string' && query.trim()) {
         clauses.push('(title LIKE ? OR body LIKE ?)');
@@ -388,7 +461,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
         params.push(type.trim().slice(0, TAG_MAX_LEN));
       }
       const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
-      rows = db.prepare(`SELECT * FROM issues${where} ORDER BY createdAt DESC`).all(...params);
+      rows = db.prepare(`SELECT * FROM issues${where} ORDER BY ${PRIORITY_ORDER}, createdAt DESC, rowid DESC`).all(...params);
     }
     const total = rows.length;
     const size = Math.max(1, limit);
@@ -402,8 +475,9 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     };
   }
 
-  function create({ title, body = '', parentId = null, tags = null, type = null, createdBy = 'user', createdByName = '' }) {
+  function create({ title, body = '', parentId = null, priority = DEFAULT_PRIORITY, tags = null, type = null, createdBy = 'user', createdByName = '' }) {
     title = assertTitle(title);
+    const cleanPriority = normalizePriority(priority, { fallback: DEFAULT_PRIORITY });
     if (!VALID_KINDS.has(createdBy)) createdBy = 'user';
     if (parentId) parentId = requireIssue(parentId).id; // parent must exist (accepts #N)
     const id = shortId();
@@ -411,7 +485,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const number = nextNumber.get().n;
     const cleanTags = normalizeTags(tags !== null && tags !== undefined ? tags : type);
     // `type` column stays as a mirror of the first label, for older readers.
-    insertIssue.run(id, number, title, String(body || ''), 'open', parentId || null, cleanTags[0] ?? null, createdBy, String(createdByName || ''), at, at);
+    insertIssue.run(id, number, title, String(body || ''), 'open', cleanPriority, parentId || null, cleanTags[0] ?? null, createdBy, String(createdByName || ''), at, at);
     writeTags(id, cleanTags);
     return { ...issueFrom(selectIssue.get(id)), tags: cleanTags };
   }
@@ -462,6 +536,13 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     }
     const title = patch.title !== undefined ? assertTitle(patch.title) : row.title;
     const body = patch.body !== undefined ? String(patch.body) : row.body;
+    const currentPriority = PRIORITIES.includes(row.priority) ? row.priority : DEFAULT_PRIORITY;
+    const priority = patch.priority !== undefined
+      ? normalizePriority(patch.priority, { fallback: null })
+      : currentPriority;
+    if (priority !== currentPriority && !EDITABLE_PRIORITY_STATUSES.has(from)) {
+      throw failure('PRIORITY_LOCKED', `当前处于「${statusLabel(from)}」状态，紧急程度已锁定，不能修改`);
+    }
     // 重开（done/failed/cancelled → 活跃状态）时清掉旧的 result，避免读到过期结论。
     const reopening = next !== from && TERMINAL_STATUSES.includes(from) && !TERMINAL_STATUSES.includes(next);
     const result = patch.result !== undefined
@@ -475,14 +556,14 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const closedAt = TERMINAL_STATUSES.includes(next)
       ? (row.closedAt ?? now())
       : (next === 'open' && row.closedAt ? null : row.closedAt);
-    db.prepare(`UPDATE issues SET title = ?, body = ?, type = ?, status = ?, result = ?, closedAt = ?, updatedAt = ?, version = version + 1 WHERE id = ?`)
-      .run(title, body, type, next, result, closedAt, now(), id);
+    db.prepare(`UPDATE issues SET title = ?, body = ?, type = ?, status = ?, priority = ?, result = ?, closedAt = ?, updatedAt = ?, version = version + 1 WHERE id = ?`)
+      .run(title, body, type, next, priority, result, closedAt, now(), id);
     if (nextTags) writeTags(id, nextTags);
     const updated = { ...issueFrom(selectIssue.get(id)), tags: nextTags ?? tagsOf(id) };
     if (next !== from) {
-      insertComment.run(id, actor.kind || 'system', actor.name || '', `状态：${statusLabel(from)} → ${statusLabel(next)}`, 'status', now());
+      insertComment.run(id, actor.kind || 'system', actor.name || '', null, `状态：${statusLabel(from)} → ${statusLabel(next)}`, 'status', null, now());
       if (from === 'in_review' && next === 'dispatched') {
-        insertComment.run(id, actor.kind || 'system', actor.name || '', patch.rejection.trim(), 'reject', now());
+        insertComment.run(id, actor.kind || 'system', actor.name || '', null, patch.rejection.trim(), 'reject', null, now());
       }
     }
     return updated;
@@ -502,7 +583,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const at = now();
     if (row.assigneeSessionId === sid && row.assigneeName === label) return getFull(id); // 没变，no-op
     updateAssignee.run(sid, label, at, now(), id);
-    insertComment.run(id, 'system', '', row.assigneeName ? `执行人：${row.assigneeName} → ${label}` : `执行人：${label}`, 'assign', at);
+    insertComment.run(id, 'system', '', null, row.assigneeName ? `执行人：${row.assigneeName} → ${label}` : `执行人：${label}`, 'assign', null, at);
     return getFull(id);
   }
 
@@ -537,14 +618,44 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     return { id: row.id, name: row.name, mime: row.mime, bytes: row.bytes, filePath };
   }
 
-  function comment(id, { body, authorKind = 'user', authorName = '', kind = 'comment' } = {}) {
+  function comment(id, { body, authorKind = 'user', authorName = '', authorSessionId = null, kind = 'comment', replyToId = null } = {}) {
     id = requireIssue(id).id; // accept #N
     if (typeof body !== 'string' || !body.trim()) throw failure('EMPTY_COMMENT', '评论不能为空');
     if (!VALID_KINDS.has(authorKind)) authorKind = 'user';
+    let parent = null;
+    if (replyToId !== null && replyToId !== undefined && replyToId !== '') {
+      const validInt = typeof replyToId === 'number'
+        ? Number.isSafeInteger(replyToId)
+        : (typeof replyToId === 'string' && /^\d+$/.test(replyToId.trim()));
+      const targetId = validInt ? Number(replyToId) : NaN;
+      if (!Number.isSafeInteger(targetId) || targetId <= 0) {
+        throw failure('INVALID_REPLY_TO', '要回复的评论编号无效');
+      }
+      parent = selectCommentById.get(targetId);
+      if (!parent || parent.issueId !== id) {
+        throw failure('INVALID_REPLY_TO', '找不到要回复的评论');
+      }
+      if (!canReplyComment(parent)) {
+        throw failure('INVALID_REPLY_TO', '状态或指派记录不能回复');
+      }
+    }
+    const cleanSid = typeof authorSessionId === 'string' && authorSessionId.trim() ? authorSessionId.trim() : null;
     const at = now();
-    const info = insertComment.run(id, authorKind, String(authorName || ''), body.trim(), kind, at);
+    const cleanBody = body.trim();
+    const info = insertComment.run(id, authorKind, String(authorName || ''), cleanSid, cleanBody, kind, parent ? parent.id : null, at);
     touch.run(now(), id);
-    return { id: Number(info.lastInsertRowid), issueId: id, authorKind, authorName: String(authorName || ''), body: body.trim(), kind, at };
+    return {
+      id: Number(info.lastInsertRowid),
+      issueId: id,
+      authorKind,
+      authorName: String(authorName || ''),
+      authorSessionId: cleanSid,
+      body: cleanBody,
+      kind,
+      replyToId: parent ? parent.id : null,
+      replyTo: replySummary(parent),
+      at,
+    };
   }
 
   /** The dispatch row of a worker task still in flight, or null. */
@@ -574,7 +685,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       : (next === 'open' && row.closedAt ? null : row.closedAt);
     db.prepare('UPDATE issues SET status = ?, closedAt = ?, updatedAt = ?, version = version + 1 WHERE id = ?')
       .run(next, closedAt, now(), id);
-    insertComment.run(id, actorName ? 'agent' : 'system', actorName || '', `状态：${statusLabel(row.status)} → ${statusLabel(next)}`, 'status', now());
+    insertComment.run(id, actorName ? 'agent' : 'system', actorName || '', null, `状态：${statusLabel(row.status)} → ${statusLabel(next)}`, 'status', null, now());
   }
 
   /**
@@ -605,7 +716,13 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
         setStatusUnchecked(id, issueStatusForTask(status), handler || '系统');
       }
       if (typeof resultText === 'string' && resultText.trim()) {
-        comment(id, { body: resultText, authorKind: handler ? 'agent' : 'system', authorName: handler || '系统', kind: 'result' });
+        comment(id, {
+          body: resultText,
+          authorKind: handler ? 'agent' : 'system',
+          authorName: handler || '系统',
+          authorSessionId: workerSessionId || null,
+          kind: 'result',
+        });
       }
     } else if (ACTIVE_STATUSES.includes(row.status) && row.status !== 'dispatched') {
       // First sighting of the live task: the issue is now owned by a worker.
@@ -633,10 +750,33 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     return map;
   }
 
-  /** 所有事务的轻量版本快照（id/编号/版本/更新时间），客户端未读角标用。 */
+  /** 所有事务的轻量版本快照（id/编号/标题/状态/紧急程度/版本/更新时间），客户端未读角标与待验收提醒用。 */
   function versions() {
-    return db.prepare('SELECT id, number, version, updatedAt FROM issues ORDER BY updatedAt DESC, rowid DESC').all()
-      .map(row => ({ id: row.id, number: row.number, version: row.version, updatedAt: row.updatedAt }));
+    return db.prepare('SELECT id, number, title, status, priority, version, updatedAt FROM issues ORDER BY updatedAt DESC, rowid DESC').all()
+      .map(row => ({
+        id: row.id,
+        number: row.number,
+        title: row.title,
+        status: row.status,
+        priority: PRIORITIES.includes(row.priority) ? row.priority : DEFAULT_PRIORITY,
+        version: row.version,
+        updatedAt: row.updatedAt,
+      }));
+  }
+
+  /** 近期回复了用户评论的非用户新评论，供客户端做桌面通知。 */
+  function userReplies(limit = 20) {
+    const size = Math.max(1, Math.min(100, Number(limit) || 20));
+    return selectUserReplies.all(size).map(row => ({
+      id: row.id,
+      issueId: row.issueId,
+      issueNumber: row.issueNumber ?? null,
+      issueTitle: row.issueTitle,
+      authorKind: row.authorKind,
+      authorName: row.authorName,
+      preview: commentPreview(row.body),
+      at: row.at,
+    }));
   }
 
   /** 服务端已读版本：{ [issueId]: lastSeenVersion }。 */
@@ -733,7 +873,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
 
   return {
     list, get: getFull, create, update, comment, activeDispatch, syncTask, counts,
-    assign, loads, versions, seen, markSeen, markSeenMany,
+    assign, loads, versions, userReplies, seen, markSeen, markSeenMany,
     addAttachment, getAttachment,
     tags, createTag, deleteTag, link, unlink,
     /** Back-compat: the old name for the label library. */

@@ -245,3 +245,65 @@ test('seen action stores read versions and meta returns them', async () => {
   const migrated = await handle({ action: 'seen', seen: { [id]: 1 } });
   assert.deepEqual(migrated.value.seen, { [id]: 2 }, '老浏览器记录不能覆盖更高版本');
 });
+
+test('comment action supports replyToId, forwards replyTo to notify, and meta exposes userReplies', async () => {
+  const seen = [];
+  const { handle } = handler({ notify: (issue, comment) => { seen.push({ issue, comment }); } });
+  const { value: { issue } } = await handle({ action: 'create', title: '核对通知' });
+
+  const c1 = await handle({ action: 'comment', id: issue.id, body: '我先写个疑问', authorKind: 'user' });
+  assert.equal(c1.ok, true);
+  assert.equal(c1.value.comment.replyToId, null);
+
+  const c2 = await handle({
+    action: 'comment',
+    id: issue.id,
+    body: '这个问题我改掉了',
+    authorKind: 'agent',
+    authorName: '伟峰',
+    replyToId: c1.value.comment.id,
+  });
+  assert.equal(c2.ok, true);
+  assert.equal(c2.value.comment.replyToId, c1.value.comment.id);
+  assert.equal(c2.value.comment.replyTo.authorKind, 'user');
+  assert.equal(c2.value.comment.replyTo.preview, '我先写个疑问');
+  assert.equal(seen.at(-1).comment.replyTo.id, c1.value.comment.id);
+
+  const bad = await handle({ action: 'comment', id: issue.id, body: '无效引用', replyToId: 99999 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'INVALID_REPLY_TO');
+
+  const meta = await handle({ action: 'meta' });
+  assert.equal(meta.value.versions[0].title, '核对通知');
+  assert.equal(meta.value.versions[0].status, 'open');
+  assert.equal(meta.value.userReplies.length, 1);
+  assert.equal(meta.value.userReplies[0].id, c2.value.comment.id);
+  assert.equal(meta.value.userReplies[0].authorName, '伟峰');
+});
+
+test('priority flows through meta, create, update, and list', async () => {
+  const { handle } = handler();
+  const meta = await handle({ action: 'meta' });
+  assert.deepEqual(meta.value.priorities, ['P0', 'P1', 'P2', 'P3']);
+
+  const p2 = await handle({ action: 'create', title: '常规任务' });
+  const p0 = await handle({ action: 'create', title: '紧急修线', priority: 'p0' });
+  assert.equal(p2.value.issue.priority, 'P2');
+  assert.equal(p0.value.issue.priority, 'P0');
+
+  const bad = await handle({ action: 'create', title: '错的', priority: 'P5' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'INVALID_PRIORITY');
+
+  const updated = await handle({ action: 'update', id: p2.value.issue.id, priority: 'P1' });
+  assert.equal(updated.value.issue.priority, 'P1');
+
+  const listed = await handle({ action: 'list', priority: 'P0' });
+  assert.equal(listed.value.total, 1);
+  assert.equal(listed.value.items[0].id, p0.value.issue.id);
+
+  await handle({ action: 'update', id: p2.value.issue.id, status: 'dispatched' });
+  const locked = await handle({ action: 'update', id: p2.value.issue.id, priority: 'P0' });
+  assert.equal(locked.ok, false);
+  assert.equal(locked.error.code, 'PRIORITY_LOCKED');
+});

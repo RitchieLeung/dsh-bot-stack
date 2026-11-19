@@ -19,7 +19,7 @@ export const FRONT_TOOLS = new Set([
   'read_group_chat', 'read_own_chat', 'list_bots', 'message_bot', 'post_to_group', 'group_relay',
   'read_image', 'web_fetch',
   // Quick Bot-level actions: memory, team and schedules belong to the Bot itself.
-  'remember', 'forget', 'review_memory', 'schedule_create', 'schedule_edit',
+  'remember', 'forget', 'review_memory', 'skill_retrospect', 'schedule_create', 'schedule_edit',
   'create_bot', 'update_bot', 'stop_bot', 'create_group', 'update_group', 'delete_group', 'group_goal',
   // 事务（issue）板：主 Bot 在前台直接管理 issue——建/列/读/流转/评论/指派/依赖。
   'issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_comment',
@@ -29,7 +29,7 @@ export const FRONT_TOOLS = new Set([
 export const WORKER_DENY = new Set([
   'message_bot', 'post_to_group', 'group_relay',
   'create_bot', 'update_bot', 'stop_bot', 'create_group', 'update_group', 'delete_group', 'group_goal',
-  'schedule_create', 'schedule_edit', 'remember', 'forget', 'review_memory',
+  'schedule_create', 'schedule_edit', 'remember', 'forget', 'review_memory', 'skill_retrospect',
   'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note',
   // 工作者可读事务、评论并推进到待验收；建单、指派和改依赖仍归主 Bot。
   'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',

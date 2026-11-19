@@ -37,17 +37,42 @@ function flagValue(argv, name) {
   return undefined;
 }
 
+function positivePort(value) {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : null;
+}
+
 /** `--port`（默认 3080），用来在重启时等端口释放。 */
 export function portOf(argv = []) {
-  const raw = flagValue(argv, 'port');
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_PORT;
+  return positivePort(flagValue(argv, 'port')) ?? DEFAULT_PORT;
 }
 
 /** `--public-url`，只在面板上展示。 */
 export function publicUrlOf(argv = []) {
   const raw = flagValue(argv, 'public-url');
   return typeof raw === 'string' && raw.trim() ? raw.trim() : '';
+}
+
+/**
+ * 解析当前生效端口：优先显式覆盖，其次运行时 `webServer.port`（profile 改端口如 3082 时
+ * 不在 argv 里），最后才回退到命令行 `--port` / `DEFAULT_PORT`。
+ */
+export function resolvePort({ port, webServer, argv = [] } = {}) {
+  return positivePort(port) ?? positivePort(webServer?.port) ?? portOf(argv);
+}
+
+/** 解析面板展示用的对外 URL：优先显式值 / `--public-url`，其次 `webApp.getAdvertisedUrl()`。 */
+export function resolvePublicUrl({ publicUrl, webApp, argv = [] } = {}) {
+  if (typeof publicUrl === 'string' && publicUrl.trim()) return publicUrl.trim();
+  const fromArgv = publicUrlOf(argv);
+  if (fromArgv) return fromArgv;
+  if (typeof webApp?.getAdvertisedUrl === 'function') {
+    try {
+      const advertised = webApp.getAdvertisedUrl();
+      if (typeof advertised === 'string' && advertised.trim()) return advertised.trim();
+    } catch { /* webApp origin may not be ready yet */ }
+  }
+  return '';
 }
 
 /**
@@ -77,7 +102,10 @@ export function buildRelaunchPlan({ execPath, argv, cwd, pid, port, logPath, wor
 }
 
 /** 面板上展示的进程状态（不含任何密钥）。 */
-export function describeStatus({ pid, ppid, argv = [], cwd = '', startedAt, nodeVersion, now = Date.now(), lastRestart = null, mode }) {
+export function describeStatus({
+  pid, ppid, argv = [], cwd = '', startedAt, nodeVersion, now = Date.now(), lastRestart = null, mode,
+  port, publicUrl,
+}) {
   return {
     pid,
     ppid,
@@ -87,8 +115,8 @@ export function describeStatus({ pid, ppid, argv = [], cwd = '', startedAt, node
     nodeVersion,
     startedAt,
     uptimeSec: Math.max(0, Math.round((now - startedAt) / 1000)),
-    port: portOf(argv),
-    publicUrl: publicUrlOf(argv),
+    port: positivePort(port) ?? portOf(argv),
+    publicUrl: typeof publicUrl === 'string' && publicUrl.trim() ? publicUrl.trim() : publicUrlOf(argv),
     lastRestart,
   };
 }

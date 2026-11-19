@@ -8,7 +8,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { buildRelaunchPlan, describeStatus, portOf, readMarker, supervisorMode } from './restart.js';
+import { buildRelaunchPlan, describeStatus, readMarker, resolvePort, resolvePublicUrl, supervisorMode } from './restart.js';
 
 function failure(code, message) {
   const error = new Error(message);
@@ -39,23 +39,28 @@ export function createRestartService({
 } = {}) {
   // 正在重启/重载时挡掉重复点击：两个 restart 同时来会把端口搞成打架。
   let pending = null;
+  const serviceOf = name => (typeof ctx?.get === 'function' ? ctx.get(name) : null);
+  const currentPort = () => resolvePort({ webServer: serviceOf('webServer'), argv });
+  const currentPublicUrl = () => resolvePublicUrl({ webApp: serviceOf('webApp'), argv });
 
   function status() {
     return describeStatus({
       pid, ppid, argv, cwd, startedAt, nodeVersion,
       mode: supervisorMode(env),
       lastRestart: markerPath ? readMarker(markerPath) : null,
+      port: currentPort(),
+      publicUrl: currentPublicUrl(),
     });
   }
 
   /** 软重载：让 HMR 按当前磁盘重组成 profile（新装的 link: 插件、改过的 host 代码都会生效）。 */
   async function reload() {
-    const hmr = typeof ctx?.get === 'function' ? ctx.get('hmr') : null;
+    const hmr = serviceOf('hmr');
     if (hmr && typeof hmr.runExclusive === 'function' && typeof hmr.reconcileProfile === 'function') {
       const result = await hmr.runExclusive(() => hmr.reconcileProfile());
       return { reloaded: true, ...result };
     }
-    const pluginManager = typeof ctx?.get === 'function' ? ctx.get('pluginManager') : null;
+    const pluginManager = serviceOf('pluginManager');
     if (pluginManager && typeof pluginManager.reload === 'function') {
       return { reloaded: true, ...(await pluginManager.reload()) };
     }
@@ -91,7 +96,7 @@ export function createRestartService({
       return { ok: true, mode, action: 'exit', pid, logPath, note: 'systemd 托管：退出后由 Restart=always 拉回来' };
     }
 
-    const plan = buildRelaunchPlan({ execPath, argv, cwd, pid, port: portOf(argv), logPath, workerPath, env });
+    const plan = buildRelaunchPlan({ execPath, argv, cwd, pid, port: currentPort(), logPath, workerPath, env });
     let child;
     try {
       child = spawnFn(plan.spawn.command, plan.spawn.args, plan.spawn.options);

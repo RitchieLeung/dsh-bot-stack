@@ -12,7 +12,7 @@
  * the bridge is not wired.
  */
 
-import { STATUSES, STATUS_LABELS } from './store.js';
+import { PRIORITIES, STATUSES, STATUS_LABELS } from './store.js';
 
 export function createIssueHandler({ store, start, mainBot = null, notify = null, rosterOf = null, diagnostics = null }) {
   const resolve = () => (typeof store === 'function' ? store() : store);
@@ -38,12 +38,13 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
       if (action === 'meta') {
         const library = resolve().tags();
         return { ok: true, value: {
-          statuses: STATUSES, mainBot, counts: resolve().counts(),
+          statuses: STATUSES, priorities: PRIORITIES, mainBot, counts: resolve().counts(),
           tags: library,
           /** Back-compat alias: `types` was the old name for the label library. */
           types: library,
           roster: typeof rosterOf === 'function' ? rosterOf() : [],
           versions: resolve().versions(),
+          userReplies: resolve().userReplies(),
           seen: resolve().seen(),
         } };
       }
@@ -52,6 +53,7 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
           status: body.status,
           parentId: body.parentId,
           type: body.type,
+          priority: body.priority,
           query: body.query,
           limit: body.limit,
           offset: body.offset,
@@ -76,6 +78,7 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
           title: body.title,
           body: body.body,
           parentId: body.parentId,
+          priority: body.priority,
           tags: body.tags !== undefined ? body.tags : body.type,
           createdBy: author.kind,
           createdByName: author.name,
@@ -93,6 +96,7 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
           result: body.result,
           title: body.title,
           body: body.body,
+          priority: body.priority,
           tags: body.tags,
           type: body.type,
           rejection: typeof body.rejection === 'string' ? body.rejection : undefined,
@@ -119,10 +123,13 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
       if (action === 'comment') {
         if (typeof body.id !== 'string' || !body.id) return fail('INVALID_ID', '缺少 issue id');
         const issue = resolve().get(body.id);
+        const replyToId = body.replyToId !== undefined ? body.replyToId : (body.replyTo !== undefined ? body.replyTo : null);
         const value = resolve().comment(body.id, {
           body: body.body,
           authorKind: author.kind,
           authorName: author.name,
+          authorSessionId: typeof body.authorSessionId === 'string' ? body.authorSessionId : null,
+          replyToId,
         });
         if (typeof notify === 'function') {
           try { await notify(issue, value, null); } catch { /* mention notification is best-effort */ }

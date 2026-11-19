@@ -614,3 +614,250 @@ test('seen persists across reopen, only advances, and does not touch issue versi
   assert.deepEqual(store.seen(), { [a.id]: 3, [b.id]: 4 }, '批量迁移也不能覆盖更高的已读版本');
   store.close();
 });
+
+// ---- 引用回复 + 状态/回复摘要 ----
+
+test('comment supports replyToId and attaches replyTo summary on get/comment', () => {
+  const store = fresh();
+  const issue = store.create({ title: '核对接口' });
+  const first = store.comment(issue.id, {
+    body: '先看这张图 ![shot.png](/api/bot-issue?attachment=abcdef1234567890)\n第二行说明',
+    authorKind: 'agent',
+    authorName: '玉清',
+    authorSessionId: 's-yu',
+  });
+  const reply = store.comment(issue.id, {
+    body: '收到，已经按这个改好了',
+    authorKind: 'user',
+    replyToId: first.id,
+  });
+
+  assert.equal(reply.replyToId, first.id);
+  assert.equal(reply.replyTo.id, first.id);
+  assert.equal(reply.replyTo.authorKind, 'agent');
+  assert.equal(reply.replyTo.authorName, '玉清');
+  assert.equal(reply.replyTo.authorSessionId, 's-yu');
+  assert.equal(reply.replyTo.preview, '先看这张图 [图片] 第二行说明');
+
+  const full = store.get(issue.id);
+  assert.equal(full.comments.length, 2);
+  assert.equal(full.comments[0].replyToId, null);
+  assert.equal(full.comments[0].replyTo, null);
+  assert.equal(full.comments[1].replyToId, first.id);
+  assert.equal(full.comments[1].replyTo.id, first.id);
+  assert.equal(full.comments[1].replyTo.authorName, '玉清');
+  store.close();
+});
+
+test('comment rejects cross-issue or missing replyToId', () => {
+  const store = fresh();
+  const a = store.create({ title: 'A' });
+  const b = store.create({ title: 'B' });
+  const bComment = store.comment(b.id, { body: 'B 的评论', authorKind: 'user' });
+
+  assert.throws(
+    () => store.comment(a.id, { body: '跨事务回复', authorKind: 'user', replyToId: bComment.id }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  assert.throws(
+    () => store.comment(a.id, { body: '不存在的评论', authorKind: 'user', replyToId: 99999 }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  assert.throws(
+    () => store.comment(a.id, { body: '非法编号', authorKind: 'user', replyToId: 'abc' }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  store.close();
+});
+
+test('comment refuses replying to status or assign entries, while allowing result and reject', () => {
+  const store = fresh();
+  const issue = store.create({ title: '不可回复系统变更' });
+  store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
+  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.comment(issue.id, { body: '任务完成总结', authorKind: 'agent', authorName: '伟峰', kind: 'result' });
+  store.update(issue.id, { status: 'dispatched', rejection: '请再补一组用例' }, { kind: 'user' });
+
+  const full = store.get(issue.id);
+  const assignEntry = full.comments.find(c => c.kind === 'assign');
+  const statusEntry = full.comments.find(c => c.kind === 'status');
+  const resultEntry = full.comments.find(c => c.kind === 'result');
+  const rejectEntry = full.comments.find(c => c.kind === 'reject');
+
+  assert.throws(
+    () => store.comment(issue.id, { body: '回复状态变更', authorKind: 'user', replyToId: statusEntry.id }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  assert.throws(
+    () => store.comment(issue.id, { body: '回复指派记录', authorKind: 'user', replyToId: assignEntry.id }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  assert.equal(store.comment(issue.id, { body: '回复结果', authorKind: 'user', replyToId: resultEntry.id }).replyToId, resultEntry.id);
+  assert.equal(store.comment(issue.id, { body: '回复打回意见', authorKind: 'agent', authorName: '伟峰', replyToId: rejectEntry.id }).replyToId, rejectEntry.id);
+  store.close();
+});
+
+test('legacy comments table without replyToId and authorSessionId migrates cleanly', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-legacy-comments-'));
+  const dbPath = join(dir, 'issue.sqlite');
+  const raw = new DatabaseSync(dbPath);
+  raw.exec(`
+    CREATE TABLE issues (
+      id TEXT PRIMARY KEY, number INTEGER, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open', parentId TEXT, type TEXT,
+      createdBy TEXT NOT NULL, createdByName TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+      closedAt INTEGER, result TEXT
+    );
+    CREATE TABLE comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, issueId TEXT NOT NULL,
+      authorKind TEXT NOT NULL DEFAULT 'user', authorName TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'comment', at INTEGER NOT NULL
+    );
+    INSERT INTO issues (id, number, title, body, status, createdBy, createdAt, updatedAt)
+    VALUES ('I-old1', 1, '老事务', '', 'open', 'user', 1000, 1000);
+    INSERT INTO comments (issueId, authorKind, authorName, body, kind, at)
+    VALUES ('I-old1', 'agent', '伟峰', '老评论', 'comment', 1001);
+  `);
+  raw.close();
+
+  const store = openIssueStore({ dbPath });
+  const full = store.get('I-old1');
+  assert.equal(full.comments.length, 1);
+  assert.equal(full.comments[0].replyToId, null);
+  assert.equal(full.comments[0].authorSessionId, null);
+
+  const reply = store.comment('I-old1', { body: '续回复老评论', authorKind: 'user', replyToId: full.comments[0].id });
+  assert.equal(reply.replyToId, full.comments[0].id);
+  assert.equal(reply.replyTo.authorName, '伟峰');
+  store.close();
+});
+
+test('versions returns title and status and userReplies lists only non-user replies to user comments', () => {
+  const store = fresh();
+  const issue = store.create({ title: '浏览器提醒测试' });
+  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+
+  const versions = store.versions();
+  assert.equal(versions.length, 1);
+  assert.equal(versions[0].title, '浏览器提醒测试');
+  assert.equal(versions[0].status, 'in_review');
+
+  const uComment = store.comment(issue.id, { body: '请看第三行', authorKind: 'user' });
+  const aComment = store.comment(issue.id, { body: '已看过', authorKind: 'agent', authorName: '伟峰' });
+  // 用户自回自己、或 Bot 回复 Bot 都不进 userReplies
+  store.comment(issue.id, { body: '我补充一下', authorKind: 'user', replyToId: uComment.id });
+  store.comment(issue.id, { body: '赞同', authorKind: 'agent', authorName: 'kiki', replyToId: aComment.id });
+  // Bot 回复用户的评论 → 应进 userReplies
+  const replyToUser = store.comment(issue.id, {
+    body: '第三行已经按你的要求改完',
+    authorKind: 'agent',
+    authorName: '伟峰',
+    replyToId: uComment.id,
+  });
+
+  const replies = store.userReplies();
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].id, replyToUser.id);
+  assert.equal(replies[0].issueId, issue.id);
+  assert.equal(replies[0].issueNumber, issue.number);
+  assert.equal(replies[0].issueTitle, '浏览器提醒测试');
+  assert.equal(replies[0].authorName, '伟峰');
+  assert.equal(replies[0].preview, '第三行已经按你的要求改完');
+  store.close();
+});
+
+// ---- 需求紧急程度（P0 ~ P3） ----
+
+test('priority defaults to P2, normalizes case, validates, and updates', () => {
+  const store = fresh();
+  const def = store.create({ title: '默认中优' });
+  assert.equal(def.priority, 'P2');
+
+  const urgent = store.create({ title: '线上故障', priority: 'p0' });
+  assert.equal(urgent.priority, 'P0');
+  assert.equal(store.get(urgent.id).priority, 'P0');
+
+  assert.throws(
+    () => store.create({ title: '非法优先级', priority: 'P9' }),
+    err => err.code === 'INVALID_PRIORITY',
+  );
+  assert.throws(
+    () => store.update(def.id, { priority: 'urgent' }),
+    err => err.code === 'INVALID_PRIORITY',
+  );
+
+  const promoted = store.update(def.id, { priority: 'P1' });
+  assert.equal(promoted.priority, 'P1');
+  assert.equal(store.get(def.id).priority, 'P1');
+  assert.equal(store.versions().find(v => v.id === def.id).priority, 'P1');
+  store.close();
+});
+
+test('priority can only be adjusted in open or discussing, locked once dispatched', () => {
+  const store = fresh();
+  const issue = store.create({ title: '优先级锁定测试', priority: 'P2' });
+  store.update(issue.id, { status: 'discussing' });
+  assert.equal(store.update(issue.id, { priority: 'P1' }).priority, 'P1');
+
+  store.update(issue.id, { status: 'dispatched' });
+  assert.throws(
+    () => store.update(issue.id, { priority: 'P0' }),
+    err => err.code === 'PRIORITY_LOCKED',
+  );
+  // 未实际改值时不报错
+  assert.equal(store.update(issue.id, { priority: 'P1', title: '改个标题' }).priority, 'P1');
+
+  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  assert.throws(() => store.update(issue.id, { priority: 'P0' }), err => err.code === 'PRIORITY_LOCKED');
+
+  store.update(issue.id, { status: 'done', result: '验收完成' }, { kind: 'user' });
+  assert.throws(() => store.update(issue.id, { priority: 'P3' }), err => err.code === 'PRIORITY_LOCKED');
+
+  // 重开回待处理后，恢复可调
+  store.update(issue.id, { status: 'open' }, { kind: 'user' });
+  assert.equal(store.update(issue.id, { priority: 'P0' }).priority, 'P0');
+  store.close();
+});
+
+test('list sorts P0 to P3 first and supports filtering by priority', () => {
+  const store = fresh();
+  const low = store.create({ title: '低优', priority: 'P3' });
+  const mid = store.create({ title: '中优' });
+  const high = store.create({ title: '高优', priority: 'P1' });
+  const crit = store.create({ title: '紧急', priority: 'P0' });
+
+  const all = store.list();
+  assert.deepEqual(all.items.map(item => item.id), [crit.id, high.id, mid.id, low.id]);
+
+  const onlyP1 = store.list({ priority: 'p1' });
+  assert.equal(onlyP1.total, 1);
+  assert.equal(onlyP1.items[0].id, high.id);
+  store.close();
+});
+
+test('legacy issues table without priority column migrates to P2', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'issue-legacy-prio-'));
+  const dbPath = join(dir, 'issue.sqlite');
+  const raw = new DatabaseSync(dbPath);
+  raw.exec(`
+    CREATE TABLE issues (
+      id TEXT PRIMARY KEY, number INTEGER, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open', parentId TEXT, type TEXT,
+      createdBy TEXT NOT NULL, createdByName TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+      closedAt INTEGER, result TEXT
+    );
+    INSERT INTO issues (id, number, title, body, status, createdBy, createdAt, updatedAt)
+    VALUES ('I-oldp', 1, '老事务', '', 'open', 'user', 1000, 1000);
+  `);
+  raw.close();
+
+  const store = openIssueStore({ dbPath });
+  const got = store.get('I-oldp');
+  assert.equal(got.priority, 'P2');
+  assert.equal(store.list({ priority: 'P2' }).total, 1);
+  store.close();
+});

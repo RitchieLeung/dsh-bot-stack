@@ -17,17 +17,40 @@ function mockCtx() {
   const tools = [];
   const effects = [];
   const prompts = [];
+  const rpcPrompts = [];
+  const messages = [];
+  const flushed = [];
   const ctx = {
     effect(fn, label) { effects.push(label); fn(); },
     connection: { fetch: { register(def) { routes.push(def); } } },
     inject(names, cb) {
       if (names.includes('tools')) cb({ effect(fn) { fn(); }, tools: { register(def) { tools.push(def); } } });
-      if (names.includes('sessionController')) cb({ sessionController: { prompt: async payload => { prompts.push(payload); } } });
+      if (names.includes('sessions')) cb({ sessions: { flush: async session => { flushed.push(session.id); } } });
+      if (names.includes('sessionController')) {
+        cb({
+          sessionController: {
+            resolveAgent: async sessionId => ({
+              agent: {
+                id: sessionId,
+                session: { id: sessionId },
+                followup: msg => {
+                  prompts.push({ sessionId, ...msg });
+                  messages.push({ sessionId, raw: msg, ...msg });
+                },
+              },
+            }),
+            prompt: async payload => {
+              rpcPrompts.push(payload);
+              prompts.push(payload);
+            },
+          },
+        });
+      }
       if (names.includes('skills')) cb({ skills: { registerProvider: () => () => {} } });
     },
     get() { return null; },
   };
-  return { ctx, routes, tools, effects, prompts };
+  return { ctx, routes, tools, effects, prompts, rpcPrompts, messages, flushed };
 }
 
 async function post(fetch, body) {
@@ -35,13 +58,13 @@ async function post(fetch, body) {
   return response.json();
 }
 
-test('host registers route, 8 tools, writeback, and start 让主 Bot 自己挑人', async () => {
+test('host registers route, 8 tools, writeback, and start 以系统事件 + system-reminder 交给主 Bot', async () => {
   const statePath = makeState(
     { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main', model: 'x/main' },
     { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng', model: 'deepseek-official/deepseek-v4-pro', role: '实施' },
     { id: 'bot-3', name: 'kiki', sessionId: 'session-kiki', model: 'google/gemini-3.8-flash', role: '协调' },
   );
-  const { ctx, routes, tools, effects, prompts } = mockCtx();
+  const { ctx, routes, tools, effects, rpcPrompts, messages, flushed } = mockCtx();
   host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
 
   assert.equal(routes.length, 1);
@@ -54,14 +77,22 @@ test('host registers route, 8 tools, writeback, and start 让主 Bot 自己挑�
 
   const started = await post(routes[0].fetch, { action: 'start', id });
   assert.equal(started.value.dispatched, true);
-  assert.equal(prompts.length, 1);
-  assert.equal(prompts[0].sessionId, 'session-main');
-  const txt = prompts[0].content[0].text;
-  assert.match(txt, /你自己.*定|由你自己/); // 执行人由主 Bot 自己定
-  assert.ok(txt.includes('list_bots'));
-  assert.ok(txt.includes('list_bot_models'));
-  assert.ok(txt.includes('issue_assign'));
-  assert.ok(txt.includes('伟峰：在办 0 条') || txt.includes('在办 0 条')); // 负载表
+  assert.doesNotMatch(started.value.note || '', /message_bot|issue_assign/, '返回给 UI 的提示不暴露内部工具名');
+  assert.equal(rpcPrompts.length, 0, '不能走普通用户 RPC prompt');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].sessionId, 'session-main');
+  assert.equal(messages[0].source?.kind, 'bot-issue', '必须是非 user 来源，才能在聊天里呈现为事件折叠卡而非普通用户气泡');
+  assert.equal(messages[0].source?.form, 'notice');
+  assert.ok(typeof messages[0].source?.summary === 'string' && messages[0].source.summary.length > 0);
+  assert.ok(Object.isFrozen(messages[0].raw) && Object.isFrozen(messages[0].source));
+  assert.ok(flushed.includes('session-main'));
+
+  const txt = messages[0].content[0].text;
+  assert.match(txt, /^<system-reminder>[\s\S]*<\/system-reminder>/, '应使用 <system-reminder> 承载原则提示');
+  assert.match(txt, /issue-workflow/, '详细规则交由 skill 承载');
+  assert.doesNotMatch(txt, /步骤：\s*\n1\./, '不再在通知正文里硬编码长篇步骤清单');
+  assert.doesNotMatch(txt, /不要说「你指定的」/, '不再硬写话术说教');
+  assert.ok(txt.includes('伟峰：在办 0 条') || txt.includes('在办 0 条')); // 运行时负载快照仍需保留
   // 启动只把事务标进行中，执行人由主 Bot 用 issue_assign 记录（这里还没记录）
   const after = await post(routes[0].fetch, { action: 'get', id });
   assert.equal(after.value.issue.status, 'dispatched');
@@ -143,27 +174,33 @@ test('start 把附件复制进共享工作区并给 read_image 路径', async ()
   assert.equal(started.value.dispatched, true);
   const prompt = prompts.find(p => p.sessionId === 'session-main');
   const txt = prompt.content[0].text;
+  assert.match(txt, /^<system-reminder>[\s\S]*<\/system-reminder>/);
   assert.match(txt, /read_image/);
-  assert.match(txt, /带图片/); // 图片任务提示要挑能看图的
+  assert.match(txt, /含图片|带图片/); // 图片任务提示要确认看图能力
   assert.ok(txt.includes(stagingDir), '派工说明里应带工作区里的附件路径');
   assert.ok(existsSync(stagingDir), '附件应被复制进工作区');
-  assert.match(txt, /不要标待验收假装完成/);
+  assert.doesNotMatch(txt, /不要标待验收假装完成/);
 });
 
-test('面板打回且没有执行人时，知会主 Bot 接手', async () => {
+test('面板打回且没有执行人时，以事件卡片和 system-reminder 知会主 Bot（不含冗余口语 hint）', async () => {
   const statePath = makeState({ id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' });
-  const { ctx, routes, prompts } = mockCtx();
+  const { ctx, routes, messages } = mockCtx();
   host.apply(ctx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes' });
   const fetch = routes[0].fetch;
   const created = await post(fetch, { action: 'create', title: '看图' });
   const id = created.value.issue.id;
   await post(fetch, { action: 'update', id, status: 'dispatched' });
   await post(fetch, { action: 'update', id, status: 'in_review' });
-  prompts.length = 0;
+  messages.length = 0;
   await post(fetch, { action: 'update', id, status: 'dispatched', rejection: '事情没完成' });
-  assert.ok(prompts.length >= 1);
-  const hit = prompts.find(p => p.sessionId === 'session-main');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.ok(messages.length >= 1);
+  const hit = messages.find(p => p.sessionId === 'session-main');
   assert.ok(hit && hit.content[0].text.includes('事情没完成'));
+  assert.equal(hit.source?.kind, 'bot-issue');
+  assert.equal(hit.source?.form, 'notice');
+  assert.match(hit.content[0].text, /^<system-reminder>[\s\S]*<\/system-reminder>/);
+  assert.doesNotMatch(hit.content[0].text, /这条还没有执行人，需要你来派工/);
 });
 
 test('执行人用别的会话 id 报回时也能知会主 Bot（会话漂移）', async () => {
@@ -604,4 +641,241 @@ test('staging caps at MAX_STAGED_ATTACHMENTS and reports how many were skipped',
   const result = host.stageIssueAttachments({ store, stagingDir, issueNumber: 1, texts });
   assert.equal(result.attachments.length, host.MAX_STAGED_ATTACHMENTS);
   assert.equal(result.skipped, 1);
+});
+
+// ── 引用回复 + 被回复者通知 ────────────────────────────────────────────────
+
+test('replying to a third-party bot comment from UI notifies that bot without @mention', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng' },
+    { id: 'bot-3', name: 'kiki', sessionId: 'session-kiki', segments: [{ sessionId: 'session-kiki-seg' }] },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+
+  const created = await post(fetch, { action: 'create', title: '跨同事回复测试' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
+  // kiki 用旧段会话发了一条评论
+  const kikiComment = await tools.find(t => t.name === 'issue_comment')
+    .execute({ id, body: '我查了一下端口在 3082' }, { agent: { session: { id: 'session-kiki-seg' } } });
+
+  prompts.length = 0;
+  // 用户从面板点击回复 kiki（没有打 @kiki）
+  const reply = await post(fetch, {
+    action: 'comment',
+    id,
+    body: '收到，请再顺手确认下超时配置',
+    authorKind: 'user',
+    replyToId: kikiComment.id,
+  });
+  assert.equal(reply.ok, true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const kikiPrompts = prompts.filter(p => p.sessionId === 'session-kiki');
+  assert.equal(kikiPrompts.length, 1, '被回复的第三位同事应该收到活跃会话通知');
+  assert.match(kikiPrompts[0].content[0].text, /我查了一下端口在 3082/);
+  assert.match(kikiPrompts[0].content[0].text, /收到，请再顺手确认下超时配置/);
+});
+
+test('reply notification deduplicates when target bot is also @mentioned and is the assignee', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng' },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+
+  const created = await post(fetch, { action: 'create', title: '去重测试' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
+  const weifengComment = await tools.find(t => t.name === 'issue_comment')
+    .execute({ id, body: '初版已完成' }, { agent: { session: { id: 'session-weifeng' } } });
+
+  prompts.length = 0;
+  await post(fetch, {
+    action: 'comment',
+    id,
+    body: '@伟峰 看一下这里',
+    authorKind: 'user',
+    replyToId: weifengComment.id,
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const wfPrompts = prompts.filter(p => p.sessionId === 'session-weifeng');
+  assert.equal(wfPrompts.length, 1, '同一只 Bot 既是执行人、又被回复、又被 @，只应发一次通知');
+});
+
+test('bot replying to its own comment does not notify itself, and issue_get / issue_comment work with replyTo', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki', segments: [{ sessionId: 'session-kiki-seg' }] },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+  const getTool = tools.find(t => t.name === 'issue_get');
+  const commentTool = tools.find(t => t.name === 'issue_comment');
+
+  const created = await post(fetch, { action: 'create', title: '工具回复测试' });
+  const id = created.value.issue.id;
+  const first = await commentTool.execute({ id, body: '第一条观察' }, { agent: { session: { id: 'session-kiki-seg' } } });
+
+  prompts.length = 0;
+  // kiki 在主 session 回复自己旧段发的评论 → 不该通知自己
+  const selfReply = await commentTool.execute(
+    { id, body: '自补一句', replyTo: first.id },
+    { agent: { session: { id: 'session-kiki' } } },
+  );
+  assert.equal(selfReply.replyTo, true);
+  const rendered = commentTool.output.render({}, selfReply)[0].text;
+  assert.match(rendered, /回复已添加/);
+  assert.doesNotMatch(rendered, /issue_|open|in_review|done|\bv\d+\b/);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(prompts.filter(p => p.sessionId === 'session-kiki').length, 0, '自己回复自己不发通知');
+
+  // 鲸鱼通过工具回复 kiki 的评论 → kiki 收到通知
+  prompts.length = 0;
+  await commentTool.execute({ id, body: '收到你的观察', replyTo: first.id }, { agent: { session: { id: 'session-main' } } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(prompts.filter(p => p.sessionId === 'session-kiki').length, 1);
+
+  const got = await getTool.execute({ id }, { agent: { session: { id: 'session-main' } } });
+  const text = getTool.output.render({}, got)[0].text;
+  const commentLines = got.comments.join('\n');
+  assert.ok(text.includes(`[评论 ${first.id}]`), 'issue_get 应带可读评论编号且不用 #N 撞事务链接');
+  assert.doesNotMatch(commentLines, new RegExp(`#${first.id}\\b`), '评论编号不能写成 #N 以免被当成事务号');
+  assert.match(commentLines, new RegExp(`回复 .*评论 ${first.id}`));
+});
+
+test('replying to a legacy "主 Bot" comment routes to mainBot active session', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: 'kiki', sessionId: 'session-kiki' },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+  const created = await post(fetch, { action: 'create', title: '主 Bot 旧评论回复' });
+  const id = created.value.issue.id;
+  // HTTP 侧未传 authorName 时默认落为「主 Bot」
+  const mainComment = await post(fetch, { action: 'comment', id, body: '请核对配置', authorKind: 'agent' });
+  prompts.length = 0;
+
+  await tools.find(t => t.name === 'issue_comment').execute(
+    { id, body: '已核对完毕', replyTo: mainComment.value.comment.id },
+    { agent: { session: { id: 'session-kiki' } } },
+  );
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const mainPrompts = prompts.filter(p => p.sessionId === 'session-main');
+  assert.equal(mainPrompts.length, 1);
+  assert.match(mainPrompts[0].content[0].text, /请核对配置/);
+});
+
+test('issue_get omits reply id on status/assign entries and issue_comment rejects replying to status', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng' },
+  );
+  const { ctx, routes, tools } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+  const getTool = tools.find(t => t.name === 'issue_get');
+  const commentTool = tools.find(t => t.name === 'issue_comment');
+
+  const created = await post(fetch, { action: 'create', title: '状态不可回复' });
+  const id = created.value.issue.id;
+  await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
+  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  await commentTool.execute({ id, body: '正文里的讨论' }, { agent: { session: { id: 'session-weifeng' } } });
+
+  const detail = await post(fetch, { action: 'get', id });
+  const statusEntry = detail.value.issue.comments.find(c => c.kind === 'status');
+  const assignEntry = detail.value.issue.comments.find(c => c.kind === 'assign');
+  const normalEntry = detail.value.issue.comments.find(c => c.kind === 'comment');
+
+  const got = await getTool.execute({ id }, { agent: { session: { id: 'session-main' } } });
+  const statusLine = got.comments.find(line => line.includes('[状态]'));
+  const assignLine = got.comments.find(line => line.includes('[指派]'));
+  const normalLine = got.comments.find(line => line.includes('正文里的讨论'));
+
+  assert.doesNotMatch(statusLine, /\[评论 \d+\]/);
+  assert.doesNotMatch(assignLine, /\[评论 \d+\]/);
+  assert.ok(normalLine.includes(`[评论 ${normalEntry.id}]`));
+
+  await assert.rejects(
+    () => commentTool.execute({ id, body: '想回状态', replyTo: statusEntry.id }, { agent: { session: { id: 'session-main' } } }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+  await assert.rejects(
+    () => commentTool.execute({ id, body: '想回指派', replyTo: assignEntry.id }, { agent: { session: { id: 'session-main' } } }),
+    err => err.code === 'INVALID_REPLY_TO',
+  );
+});
+
+test('issue tools and start dispatch include priority P0-P3', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng' },
+  );
+  const { ctx, routes, tools, prompts } = mockCtx();
+  host.apply(ctx, { dbPath: tempDb(), statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const fetch = routes[0].fetch;
+  const exec = { agent: { session: { id: 'session-main' } } };
+  const createTool = tools.find(t => t.name === 'issue_create');
+  const listTool = tools.find(t => t.name === 'issue_list');
+  const getTool = tools.find(t => t.name === 'issue_get');
+  const updateTool = tools.find(t => t.name === 'issue_update');
+
+  const created = await createTool.execute({ title: '紧急修复', body: '立刻处理', priority: 'P0' }, exec);
+  assert.equal(created.priority, 'P0');
+  assert.match(createTool.output.render({}, created)[0].text, /P0/);
+
+  await createTool.execute({ title: '普通优化', priority: 'P3' }, exec);
+  const p0List = await listTool.execute({ priority: 'P0' }, exec);
+  assert.equal(p0List.length, 1);
+  assert.equal(p0List[0].priority, 'P0');
+  assert.match(listTool.output.render({}, p0List)[0].text, /P0/);
+  assert.equal(listTool.output.schema.items.properties.priority.type, 'string');
+
+  const updated = await updateTool.execute({ id: created.id, priority: 'P1' }, exec);
+  assert.equal(updated.priority, 'P1');
+  assert.match(updateTool.output.render({}, updated)[0].text, /P1/);
+
+  const got = await getTool.execute({ id: created.id }, exec);
+  assert.equal(got.priority, 'P1');
+  assert.match(getTool.output.render({}, got)[0].text, /P1/);
+
+  prompts.length = 0;
+  await post(fetch, { action: 'start', id: created.id });
+  assert.match(prompts[0].content[0].text, /紧急程度：P1/);
+});
+
+test('评论回复与 @提及通知同样走 bot-issue notice + system-reminder，缺少 resolveAgent 时降级回 prompt', async () => {
+  const statePath = makeState(
+    { id: 'bot-1', name: '鲸鱼', sessionId: 'session-main' },
+    { id: 'bot-2', name: '伟峰', sessionId: 'session-weifeng' },
+  );
+  const legacyPrompts = [];
+  const legacyCtx = {
+    effect(fn) { fn(); },
+    connection: { fetch: { register(def) { legacyRoutes.push(def); } } },
+    inject(names, cb) {
+      if (names.includes('sessionController')) {
+        cb({ sessionController: { prompt: async payload => { legacyPrompts.push(payload); } } });
+      }
+    },
+    get() { return null; },
+  };
+  const legacyRoutes = [];
+  host.apply(legacyCtx, { dbPath: ':memory:', statePath, nodesRoot: '/tmp/definitely-missing-nodes', writebackIntervalMs: 999_999 });
+  const created = await post(legacyRoutes[0].fetch, { action: 'create', title: '降级测试' });
+  await post(legacyRoutes[0].fetch, { action: 'comment', id: created.value.issue.id, body: '@伟峰 看一下', authorKind: 'user' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(legacyPrompts.length, 1);
+  assert.match(legacyPrompts[0].content[0].text, /^<system-reminder>[\s\S]*<\/system-reminder>/);
 });

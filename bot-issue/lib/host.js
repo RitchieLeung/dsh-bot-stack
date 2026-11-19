@@ -21,7 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { ATTACHMENT_MAX_BYTES, openIssueStore, STATUSES, STATUS_LABELS } from './store.js';
+import { ATTACHMENT_MAX_BYTES, canReplyComment, DEFAULT_PRIORITY, openIssueStore, PRIORITIES, PRIORITY_LABELS, STATUSES, STATUS_LABELS } from './store.js';
 import { createIssueHandler } from './handler.js';
 import { startWriteback } from './writeback.js';
 import { imageTask } from './routing.js';
@@ -316,8 +316,17 @@ function caller(exec, nameOf, isMainOf) {
   return { kind: 'user', name: '用户', id: '', isMain: true };
 }
 
-const brief = issue => ({ id: issue.id, number: issue.number, title: issue.title, status: issue.status, parentId: issue.parentId, updatedAt: issue.updatedAt });
+const brief = issue => ({
+  id: issue.id,
+  number: issue.number,
+  title: issue.title,
+  status: issue.status,
+  priority: issue.priority || DEFAULT_PRIORITY,
+  parentId: issue.parentId,
+  updatedAt: issue.updatedAt,
+});
 const statusEnum = [...STATUSES];
+const priorityEnum = [...PRIORITIES];
 /** `open=待处理、discussing=讨论中…`：给模型看的枚举，人话名字从 store 来，不重复维护。 */
 const statusGloss = STATUSES.map(status => `${status}=${STATUS_LABELS[status]}`).join('、');
 // 模型看到的文案统一用人话状态名（待处理/待验收/已闭环…），不暴露 open/in_review 这类内部码。
@@ -343,8 +352,39 @@ export function apply(ctx, config = {}) {
   const mainBot = resolveMainBot(statePath);
   const mainBotSessionIds = mainBot?.sessionIds ?? new Set();
   const isMainOf = sid => typeof sid === 'string' && mainBotSessionIds.has(sid);
+  const NOTICE_SUMMARY_MAX = 120;
+  const boundSummary = summary => {
+    const s = String(summary || '').replace(/\s+/g, ' ').trim();
+    if (!s) return '事务通知';
+    return s.length <= NOTICE_SUMMARY_MAX ? s : `${s.slice(0, NOTICE_SUMMARY_MAX - 1)}…`;
+  };
+  const deepFreeze = value => {
+    if (!value || typeof value !== 'object') return value;
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+    return value;
+  };
+  const escapeReminder = line => String(line || '').replaceAll('</system-reminder>', '<\\/system-reminder>');
+  const formatSystemReminder = (lines, body = '') => {
+    const head = ['<system-reminder>', ...lines.filter(Boolean).map(escapeReminder), '</system-reminder>'].join('\n');
+    const tail = String(body || '').trim();
+    return tail ? `${head}\n\n${tail}` : head;
+  };
+  const createNoticeMessage = (text, summary) => deepFreeze(structuredClone({
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: {
+      kind: 'bot-issue',
+      form: 'notice',
+      summary: boundSummary(summary),
+    },
+  }));
+
   let sessionController = null;
+  let sessions = null;
   ctx.inject(['sessionController'], sc => { sessionController = sc.sessionController; });
+  ctx.inject(['sessions'], s => { sessions = s.sessions; });
   // 内置「事务规则」skill：全队成员共用一份工作流规则（硬规则由上面代码兜底）。
   let skillsWired = false;
   ctx.inject(['skills'], skillsCtx => {
@@ -354,65 +394,136 @@ export function apply(ctx, config = {}) {
   });
   const nameOf = sid => botNamesOf(statePath).get(sid) || null;
 
-  // 事务评论里的 @同事 → 直接 prompt 那位同事的前台会话，等于「at 到了」。
-  const notifyMentions = (issue, body, commenterSessionId = null) => {
-    if (typeof body !== 'string' || !body.includes('@') || typeof sessionController?.prompt !== 'function') return;
-    const label = issue.number ? `#${issue.number}` : issue.id;
-    const roster = botRoster(statePath).filter(bot => bot.sessionId).sort((a, b) => b.name.length - a.name.length);
-    const seen = new Set();
-    for (const bot of roster) {
-      if (!body.includes(`@${bot.name}`)) continue;
-      if (bot.sessionId === commenterSessionId) continue;
-      if (seen.has(bot.sessionId)) continue;
-      seen.add(bot.sessionId);
-      const text = `你在事务 ${label}「${issue.title}」的评论里被 @ 了。\n评论内容：\n${body}\n\n需要的话用 issue_get 读 ${label}，再用 issue_comment 回复。`;
-      try {
-        sessionController.prompt(
-          { requestId: randomUUID(), sessionId: bot.sessionId, mode: 'queue', content: [{ type: 'text', text }] },
-          AbortSignal.timeout(30_000),
-        ).catch(() => {});
-      } catch { /* best effort */ }
-    }
-  };
-
-  // 事务有更新时知会对侧：执行人动作 → 知会主 Bot；主 Bot/人动作 → 知会执行人；
-  // 没有执行人（老事务/未派工）→ 知会主 Bot 来处理（重新派工）。
-  // 同一个 Bot 的会话 id 可能不止一个（bot.id / sessionId / 各段），用名字判同一只 Bot，避免
-  // 「执行人报回来自动知会主 Bot」因会话 id 漂移而失效。
+  // 同一个 Bot 的会话 id 可能不止一个（bot.id / sessionId / 各段），用名字判同一只 Bot，
+  // 并在同一次提醒中按 Bot 规范键去重，避免「被回复 + @ + 对侧」连发三条提醒。
   const sameBot = (a, b) => {
     if (!a || !b) return false;
     if (a === b) return true;
     const na = nameOf(a);
     return !!na && na === nameOf(b);
   };
-  const notifyCounterpart = (issue, bySessionId, summary) => {
-    if (typeof sessionController?.prompt !== 'function') return;
+  const resolveBotTarget = ({ sessionId = null, name = null } = {}) => {
+    const names = botNamesOf(statePath);
+    const trimmed = typeof name === 'string' && name.trim() ? name.trim() : null;
+    const resolvedName = (sessionId && names.get(sessionId)) || trimmed;
+    const roster = botRoster(statePath);
+    let bot = roster.find(b => (resolvedName && b.name === resolvedName) || (sessionId && b.sessionId === sessionId));
+    if (!bot && resolvedName === '主 Bot' && mainBot?.id) {
+      bot = roster.find(b => b.id === mainBot.id) || mainBot;
+    }
+    const targetSid = bot?.sessionId || sessionId || null;
+    const key = bot?.id ? `bot:${bot.id}` : (resolvedName ? `name:${resolvedName}` : (targetSid ? `sid:${targetSid}` : null));
+    return { key, sessionId: targetSid };
+  };
+  // 以 DSH 非用户事件（form: 'notice'）+ <system-reminder> 唤醒目标会话，
+  // 聊天界面会渲染为「收到执行请求」折叠事件卡，不混入普通用户气泡。
+  const sendNotice = async (sessionId, { summary, text }) => {
+    if (!sessionId || !sessionController) return false;
+    if (typeof sessionController.resolveAgent === 'function') {
+      const resolved = await sessionController.resolveAgent(sessionId);
+      if (!resolved || 'error' in resolved || typeof resolved.agent?.followup !== 'function') {
+        throw new Error(resolved?.error?.message || '目标会话不可用');
+      }
+      resolved.agent.followup(createNoticeMessage(text, summary));
+      if (typeof sessions?.flush === 'function' && resolved.agent.session) {
+        await sessions.flush(resolved.agent.session);
+      }
+      return true;
+    }
+    if (typeof sessionController.prompt === 'function') {
+      await sessionController.prompt(
+        { requestId: randomUUID(), sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+        AbortSignal.timeout(30_000),
+      );
+      return true;
+    }
+    return false;
+  };
+  const deliverBestEffort = async (sessionId, payload) => {
+    try { return await sendNotice(sessionId, payload); } catch { return false; }
+  };
+
+  // 回复某条评论时直接知会原评论作者（如果作者是 Bot 且不是回复者自己）。
+  const notifyReplyTarget = async (issue, comment, commenterSessionId = null, notified = new Set()) => {
+    const target = comment?.replyTo;
+    if (!target || target.authorKind !== 'agent') return;
+    const resolved = resolveBotTarget({ sessionId: target.authorSessionId, name: target.authorName });
+    if (!resolved.sessionId || sameBot(resolved.sessionId, commenterSessionId)) return;
+    if (resolved.key && notified.has(resolved.key)) return;
+    const label = issue.number ? `#${issue.number}` : issue.id;
+    const replier = comment.authorKind === 'user' ? '用户' : (comment.authorName || '同事');
+    const text = formatSystemReminder(
+      [`[事务评论回复] 目标评论 #${comment.id}（事务 ${label}「${issue.title}」）；若需回应请遵循 \`issue-workflow\` 规则。`],
+      [`${replier} 回复了你的评论：`, target.preview ? `> ${target.preview}` : null, comment.body].filter(Boolean).join('\n'),
+    );
+    if (await deliverBestEffort(resolved.sessionId, { summary: `${label} 评论被 ${replier} 回复`, text }) && resolved.key) {
+      notified.add(resolved.key);
+    }
+  };
+
+  // 事务评论里的 @同事 → 以事件通知唤醒被提及同事的前台会话。
+  const notifyMentions = async (issue, body, commenterSessionId = null, notified = new Set()) => {
+    if (typeof body !== 'string' || !body.includes('@') || !sessionController) return;
+    const label = issue.number ? `#${issue.number}` : issue.id;
+    const roster = botRoster(statePath).filter(bot => bot.sessionId).sort((a, b) => b.name.length - a.name.length);
+    for (const bot of roster) {
+      if (!body.includes(`@${bot.name}`)) continue;
+      if (sameBot(bot.sessionId, commenterSessionId)) continue;
+      const { key } = resolveBotTarget({ sessionId: bot.sessionId, name: bot.name });
+      if (key && notified.has(key)) continue;
+      const text = formatSystemReminder(
+        [`[事务提及通知] 你在事务 ${label}「${issue.title}」中被提及；请遵循 \`issue-workflow\` 规则按需处理。`],
+        `评论内容：\n${body}`,
+      );
+      if (await deliverBestEffort(bot.sessionId, { summary: `${label} 评论提及了你`, text }) && key) {
+        notified.add(key);
+      }
+    }
+  };
+
+  // 事务有更新时知会对侧：执行人动作 → 知会主 Bot；主 Bot/人动作 → 知会执行人；
+  // 没有执行人（老事务/未派工）→ 知会主 Bot 按规则接手。
+  const notifyCounterpart = async (issue, bySessionId, summary, notified = new Set()) => {
+    if (!sessionController) return;
     const label = issue.number ? `#${issue.number}` : issue.id;
     const assigneeSid = issue?.assignee?.sessionId;
     let target;
     if (assigneeSid) {
-      if (bySessionId && sameBot(bySessionId, assigneeSid)) target = { sessionId: mainBot?.sessionId, name: '主 Bot' };
+      if (bySessionId && sameBot(bySessionId, assigneeSid)) target = { sessionId: mainBot?.sessionId, name: mainBot?.name || '主 Bot' };
       else if (!bySessionId || isMainOf(bySessionId)) target = { sessionId: assigneeSid, name: issue.assignee.name || assigneeSid };
       else return; // 既不是执行人也不是主 Bot 的第三位，不打扰对侧
     } else {
       // 没有执行人：主 Bot 自己动的手就不必再通知自己，其它情况让主 Bot 接手。
-      if (!bySessionId || !isMainOf(bySessionId)) target = { sessionId: mainBot?.sessionId, name: '主 Bot' };
+      if (!bySessionId || !isMainOf(bySessionId)) target = { sessionId: mainBot?.sessionId, name: mainBot?.name || '主 Bot' };
     }
-    if (!target?.sessionId) return;
-    const text = `事务 ${label}「${issue.title}」有更新：${summary}\n请用 issue_get 读 ${label}，再按事务规则跟进${assigneeSid ? '' : '（这条还没有执行人，需要你来派工/接手）'}。`;
-    try {
-      sessionController.prompt(
-        { requestId: randomUUID(), sessionId: target.sessionId, mode: 'queue', content: [{ type: 'text', text }] },
-        AbortSignal.timeout(30_000),
-      ).catch(() => {});
-    } catch { /* best effort */ }
+    if (!target?.sessionId || sameBot(target.sessionId, bySessionId)) return;
+    const { key } = resolveBotTarget({ sessionId: target.sessionId, name: target.name });
+    if (key && notified.has(key)) return;
+    const text = formatSystemReminder(
+      [`[事务状态变更] 事务 ${label}「${issue.title}」发生更新；请对照 \`issue-workflow\` 规则读取上下文并按职责跟进。`],
+      `事务：${label}「${issue.title}」\n动态：${summary}`,
+    );
+    if (await deliverBestEffort(target.sessionId, { summary: `事务 ${label}：${summary}`, text }) && key) {
+      notified.add(key);
+    }
   };
 
-  // 「启动」＝由 host 做确定性选人（能力 + 负载），定下执行人并落库；主 Bot 只负责
-  // 写任务说明 + message_bot 给被点名的人。
+  const notifyActivity = async (issue, comment, commenterSessionId = null, summaryOverride = null) => {
+    const notified = new Set();
+    try { await notifyReplyTarget(issue, comment, commenterSessionId, notified); } catch { /* best effort */ }
+    try { await notifyMentions(issue, comment?.body, commenterSessionId, notified); } catch { /* best effort */ }
+    // 状态变更总是知会对侧（无执行人时知会主 Bot 接手）；评论只在有执行人时知会对侧，避免刷屏。
+    if (comment?.statusChange || issue?.assignee) {
+      try { await notifyCounterpart(issue, commenterSessionId, summaryOverride || comment?.body || '有更新', notified); } catch { /* best effort */ }
+    }
+  };
+
+  // 「启动」＝推送派工事件给主 Bot；主 Bot 按 `issue-workflow` skill 自主选人、message_bot 并登记执行人。
   const start = async (issue) => {
     if (!mainBot?.sessionId) return { dispatched: false, reason: '找不到主 Bot 会话（检查 state.json 的 mainBotIds）' };
-    if (typeof sessionController?.prompt !== 'function') return { dispatched: false, reason: '宿主未提供 sessionController' };
+    if (typeof sessionController?.resolveAgent !== 'function' && typeof sessionController?.prompt !== 'function') {
+      return { dispatched: false, reason: '宿主未提供 sessionController' };
+    }
     // 有进行中的工作者任务，或已派给执行人：不重复启动。老事务（dispatched 但没执行人、
     // 也没有在途任务）允许「重派」。
     if (store().activeDispatch(issue.id)) return { dispatched: false, reason: '该 issue 有进行中的工作者任务，不能重复启动' };
@@ -444,40 +555,35 @@ export function apply(ctx, config = {}) {
       }
     } catch { /* best effort */ }
 
-    const text = [
-      `【事务派工】事务 ${issue.id}「${issue.title}」需要你来派工。**执行人由你自己（主 Bot）定**，按「专才 + 负载 + 能不能看图」挑一位同事——不是你被指定。`,
-      '步骤：',
-      '1. 用 list_bots 看同事；用 list_bot_models 看谁的模型标着 "reads images"（能看图）。',
-      '2. 本机同事当前在办（负载，越少越好）：',
-      loadTable,
-      needVision
-        ? '3. ⚠️ 这条事务带图片：**必须挑能看图的同事**（list_bot_models 里 "reads images" 的）。挑错了它看不到图，会闭环回来找你重派。'
-        : '3. 按事务内容挑最合适的（专才优先、负载低的优先）。',
-      `4. 用 message_bot 把任务交给它（reply_to 默认 me，when 现在）。message 要自包含（对方看不到这里），写明：事务 ${issue.id}：${issue.title}；任务说明（见下方正文）；做完用 issue_comment 写结果 + issue_update 推进到 in_review；要动手（跑命令/读仓库/连库）时用 dispatch_work 并带 issueId=${issue.id}，工作者结果会自动写回本事务；做不了/看不到图就 issue_comment 说明 + message_bot 找你，不要标待验收假装完成。`,
-      attachments.length
-        ? `5. 附件已放到共享工作区，把这几个本地路径写进 message（对方用 read_image 读路径才能看到图，只看 /api/... URL 看不到）：\n${attachments.map(a => `   - ${a.path}（${a.name}）`).join('\n')}`
-        : null,
-      '6. 用 issue_assign 记录执行人：issue_assign(事务 id, 对方名字)。',
-      '7. 如果对方做不了/看不到图，它会闭环回来找你 → 你改派（issue_assign 换人）或拆子事务（issue_create 带 parentId）再派。',
-      '注意两条路别混：**交接给同事**只走 message_bot + issue_assign；**要动手**（跑命令/读文件/连库）才用 dispatch_work，',
-      `并且必须带 issueId=${issue.id}——它起的是有完整工具的工作者，不是同事，结果会自动写回本事务。前台直接跑命令会被拦。`,
-      '验收时你自己也没有前台 shell：要核验就派一个带 issueId 的复核任务，拿它的证据（EXPLAIN、日志、行数）判断是否通过。',
-      '回复用户时，说「我按专才+负载挑了 X」，不要说「你指定的」——是你自己挑的。',
-      '--- 事务正文 ---',
-      issue.body || '（无正文）',
-    ].filter(line => line !== null).join('\n');
+    const label = issue.number ? `#${issue.number}` : issue.id;
+    const prioLabel = PRIORITY_LABELS[issue.priority] || issue.priority || PRIORITY_LABELS[DEFAULT_PRIORITY];
+    const attachmentsSection = attachments.length
+      ? `\n\n附件本地路径（read_image 读取）：\n${attachments.map(a => `- ${a.path}（${a.name}）`).join('\n')}`
+      : '';
+    const text = formatSystemReminder(
+      [
+        '[事务派工事件] 请主 Bot 按 `issue-workflow` 规则自主调度并完成指派登记。',
+        needVision
+          ? '- 本事务包含图片，选定执行人时需确认其模型具备读图能力；转交时附带下列本机附件路径。'
+          : '- 结合成员专长与当前负载独立选定执行人，勿混淆团队交接与工作者派工路径。',
+      ],
+      [
+        `事务：${label}（${issue.id}）「${issue.title}」`,
+        `紧急程度：${prioLabel}`,
+        '',
+        '同事在办负载：',
+        loadTable,
+      ].join('\n') + attachmentsSection + `\n\n正文：\n${issue.body || '（无正文）'}`,
+    );
 
     try {
-      await sessionController.prompt(
-        { requestId: randomUUID(), sessionId: mainBot.sessionId, mode: 'queue', content: [{ type: 'text', text }] },
-        AbortSignal.timeout(30_000),
-      );
+      await sendNotice(mainBot.sessionId, { summary: `派工：${label}「${issue.title}」`, text });
     } catch (error) {
       return { dispatched: false, reason: `通知主 Bot 失败：${error.message}` };
     }
-    // 执行人由主 Bot 用 issue_assign 记录（它自己挑的人）；这里只把事务标为进行中。
+    // 执行人由主 Bot 自主指派记录；这里只把事务标为进行中。
     store().update(issue.id, { status: 'dispatched' }, { kind: 'system', name: '' });
-    return { dispatched: true, note: '已交给主 Bot：它会按专才+负载自己挑人、message_bot 派活，并用 issue_assign 记录执行人' };
+    return { dispatched: true, note: '已交给主 Bot 处理' };
   };
 
 
@@ -491,11 +597,7 @@ export function apply(ctx, config = {}) {
   const handle = createIssueHandler({
     store, mainBot, start, diagnostics,
     notify: (issue, comment, commenterSessionId) => {
-      try { notifyMentions(issue, comment?.body, commenterSessionId); } catch { /* best effort */ }
-      // 状态变更总是知会对侧（无执行人时知会主 Bot 接手）；评论只在有执行人时知会对侧，避免刷屏。
-      if (comment?.statusChange || issue?.assignee) {
-        try { notifyCounterpart(issue, commenterSessionId, comment?.body || '有更新'); } catch { /* best effort */ }
-      }
+      notifyActivity(issue, comment, commenterSessionId);
     },
     rosterOf: () => botRoster(statePath),
   });
@@ -566,6 +668,7 @@ export function apply(ctx, config = {}) {
           title: { type: 'string', description: '一句话标题' },
           body: { type: 'string', description: '完整说明：背景、要做成什么、验收标准' },
           parentId: { type: 'string', description: '拆分子任务时，挂到父 issue 的 id 下' },
+          priority: { type: 'string', enum: priorityEnum, description: '需求紧急程度：P0（紧急）、P1（高）、P2（中，默认）、P3（低）' },
           tags: { type: 'array', items: { type: 'string' }, description: '事务标签，可多个（bug / feature / 优化 / 调研 …）；标签库里没有的会自动新建' },
           type: { type: 'string', description: '单个标签的旧写法，等价于 tags 只填一个' },
           images: {
@@ -577,33 +680,34 @@ export function apply(ctx, config = {}) {
         required: ['title'],
       },
       output: {
-        schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false },
-        render: (_args, value) => [{ type: 'text', text: `已创建 ${value.id}（${labelOf(value.status)}）` }],
+        schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' }, priority: { type: 'string' } }, additionalProperties: false },
+        render: (_args, value) => [{ type: 'text', text: `已创建 ${value.id}（${labelOf(value.status)} · ${value.priority || DEFAULT_PRIORITY}）` }],
       },
       async execute(args, exec) {
         const actor = caller(exec, nameOf, isMainOf);
         // 先把图片全部校验完再建事务：任何一张坏掉都不该留下半成品事务。
         const planned = planImages(args.images);
         const issue = store().create({
-          title: args.title, body: args.body, parentId: args.parentId,
+          title: args.title, body: args.body, parentId: args.parentId, priority: args.priority,
           tags: args.tags !== undefined ? args.tags : args.type,
           createdBy: 'agent', createdByName: actor.name,
         });
         // 附件要挂 issueId，所以只能先建事务再补正文。
         const { markdown } = savePlannedImages({ store, issueId: issue.id, planned });
-        if (!markdown) return { id: issue.id, status: issue.status };
+        if (!markdown) return { id: issue.id, status: issue.status, priority: issue.priority };
         const updated = store().update(issue.id, { body: [issue.body, markdown].filter(Boolean).join('\n\n') }, actor);
-        return { id: updated.id, status: updated.status };
+        return { id: updated.id, status: updated.status, priority: updated.priority };
       },
     }), 'bot-issue: tool create');
 
     toolsCtx.effect(() => register({
       name: 'issue_list',
-      description: '列出事务。可按状态或父 issue 过滤，返回简要信息；要看全文用 issue_get。',
+      description: '列出事务。可按状态、紧急程度或父 issue 过滤，返回简要信息（默认按紧急程度从高到低排）；要看全文用 issue_get。',
       parameters: {
         type: 'object',
         properties: {
           status: { type: 'string', enum: statusEnum, description: '只列这个状态' },
+          priority: { type: 'string', enum: priorityEnum, description: '只列这个紧急程度（P0~P3）' },
           parentId: { type: 'string', description: '只列挂在某个父 issue 下的子事务' },
           type: { type: 'string', description: '只列带这个标签的事务（bug / feature …）' },
         },
@@ -618,21 +722,21 @@ export function apply(ctx, config = {}) {
             // 会让整条工具注册失败）——所以它不在这里声明，靠 additionalProperties 放行。
             properties: {
               id: { type: 'string' }, number: { type: 'integer' }, title: { type: 'string' },
-              status: { type: 'string' }, updatedAt: { type: 'integer' },
+              status: { type: 'string' }, priority: { type: 'string' }, updatedAt: { type: 'integer' },
             },
             additionalProperties: true,
           },
         },
-        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(t => `#${t.number ?? '?'} ${labelOf(t.status)} ${t.id}  ${t.title}`).join('\n') : '（空）' }],
+        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(t => `#${t.number ?? '?'} [${t.priority || DEFAULT_PRIORITY}] ${labelOf(t.status)} ${t.id}  ${t.title}`).join('\n') : '（空）' }],
       },
       async execute(args) {
-        return store().list({ status: args.status, parentId: args.parentId, type: args.type }).items.map(brief);
+        return store().list({ status: args.status, priority: args.priority, parentId: args.parentId, type: args.type }).items.map(brief);
       },
     }), 'bot-issue: tool list');
 
     toolsCtx.effect(() => register({
       name: 'issue_get',
-      description: '读一个事务的全文：标题、正文、状态、标签、依赖、结果、评论时间线和派工记录。返回的 version 用于 issue_update 的安全写入。id 可以是内部 id，也可以是 #编号（如 #12）。',
+      description: '读一个事务的全文：标题、正文、状态、紧急程度、标签、依赖、结果、评论时间线和派工记录。返回的 version 用于 issue_update 的安全写入。id 可以是内部 id，也可以是 #编号（如 #12）。',
       parameters: {
         type: 'object',
         properties: { id: { type: 'string', description: 'issue id 或 #编号（如 #12）' } },
@@ -643,7 +747,7 @@ export function apply(ctx, config = {}) {
         render: (_args, value) => [{
           type: 'text',
           text: [
-            `#${value.number ?? '?'} ${value.title}【${labelOf(value.status)}】`,
+            `#${value.number ?? '?'} [${value.priority || DEFAULT_PRIORITY}] ${value.title}【${labelOf(value.status)}】`,
             value.tags?.length ? `标签：${value.tags.join('、')}` : null,
             value.assignee ? `执行人：${value.assignee}` : null,
             value.createdByName ? `创建人：${value.createdByName}` : null,
@@ -683,14 +787,21 @@ export function apply(ctx, config = {}) {
         const shownComments = comments.slice(-MAX_COMMENTS);
         return {
           id: issue.id, number: issue.number, title: issue.title, body: issue.body, status: issue.status,
-          type: issue.type, tags: issue.tags, version: issue.version,
+          priority: issue.priority, type: issue.type, tags: issue.tags, version: issue.version,
           assignee: issue.assignee ? (issue.assignee.name || issue.assignee.sessionId) : null,
           dependsOn: issue.dependsOn.map(dep => `#${dep.number} ${labelOf(dep.status)} ${dep.title}`),
           blocks: issue.blocks.map(dep => `#${dep.number} ${labelOf(dep.status)} ${dep.title}`),
           result: issue.result, createdByName: issue.createdByName, createdAt: issue.createdAt, updatedAt: issue.updatedAt,
           commentTotal: comments.length,
           commentsTruncated,
-          comments: shownComments.map(c => `[${kindLabelOf(c.kind)}] ${c.authorName || c.authorKind}（${fmtTime(c.at)}）：${c.body}`),
+          comments: shownComments.map(c => {
+            const who = c.authorKind === 'user' ? '用户' : (c.authorName || c.authorKind);
+            const prefix = canReplyComment(c) ? `[评论 ${c.id}]` : '';
+            const replyHint = c.replyTo
+              ? ` 回复 [评论 ${c.replyTo.id}]（${c.replyTo.authorKind === 'user' ? '用户' : (c.replyTo.authorName || c.replyTo.authorKind)}）`
+              : '';
+            return `${prefix}[${kindLabelOf(c.kind)}] ${who}（${fmtTime(c.at)}）${replyHint}：${c.body}`;
+          }),
           dispatches: issue.dispatches.map(d => `${d.taskId}（${labelOf(d.status)}）`),
           attachments: staged.attachments,
           attachmentsSkipped: staged.skipped,
@@ -700,12 +811,13 @@ export function apply(ctx, config = {}) {
 
     toolsCtx.effect(() => register({
       name: 'issue_update',
-      description: `更新事务：改状态、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}）；只有用户能推进到 done（已闭环），主 Bot 到 in_review（待验收）即视为交验；传 expectedVersion 可避免覆盖别人的改动。`,
+      description: `更新事务：改状态、紧急程度、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}）；只有用户能推进到 done（已闭环），主 Bot 到 in_review（待验收）即视为交验；传 expectedVersion 可避免覆盖别人的改动。`,
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
           status: { type: 'string', enum: statusEnum, description: `目标状态（${statusGloss}）。in_review=待验收（执行人交验、主 Bot 测试通过的终点）；done=已闭环（仅用户可点，主 Bot 点会被拒绝）` },
+          priority: { type: 'string', enum: priorityEnum, description: '需求紧急程度：P0（紧急）、P1（高）、P2（中）、P3（低）' },
           result: { type: 'string', description: '闭环结果/验收意见（用户把 in_review 推进到 done 时必填，写清验证了什么，不要只写状态）' },
           rejection: { type: 'string', description: '打回意见（把 in_review 打回 dispatched 时必填）' },
           title: { type: 'string' },
@@ -722,8 +834,8 @@ export function apply(ctx, config = {}) {
         required: ['id'],
       },
       output: {
-        schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' }, version: { type: 'integer' } }, additionalProperties: false },
-        render: (_args, value) => [{ type: 'text', text: `${value.id} → ${labelOf(value.status)}` }],
+        schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' }, priority: { type: 'string' }, version: { type: 'integer' } }, additionalProperties: false },
+        render: (_args, value) => [{ type: 'text', text: `${value.id} → ${labelOf(value.status)}（${value.priority || DEFAULT_PRIORITY}）` }],
       },
       async execute(args, exec) {
         const actor = caller(exec, nameOf, isMainOf);
@@ -736,7 +848,7 @@ export function apply(ctx, config = {}) {
           ? [args.body !== undefined ? args.body : before.body, markdown].filter(Boolean).join('\n\n')
           : args.body;
         const issue = store().update(args.id, {
-          status: args.status, result: args.result, title: args.title, body,
+          status: args.status, priority: args.priority, result: args.result, title: args.title, body,
           tags: args.tags, type: args.type,
           rejection: typeof args.rejection === 'string' ? args.rejection : undefined,
           expectedVersion: typeof args.expectedVersion === 'number' ? args.expectedVersion : undefined,
@@ -745,9 +857,9 @@ export function apply(ctx, config = {}) {
           const summary = typeof args.rejection === 'string' && args.rejection.trim()
             ? `被打回重做：${args.rejection.trim()}`
             : `状态变为「${STATUS_LABELS[issue.status] || issue.status}」`;
-          try { notifyCounterpart(issue, actor.id, summary); } catch { /* best effort */ }
+          try { await notifyCounterpart(issue, actor.id, summary); } catch { /* best effort */ }
         }
-        return { id: issue.id, status: issue.status, version: issue.version };
+        return { id: issue.id, status: issue.status, priority: issue.priority, version: issue.version };
       },
     }), 'bot-issue: tool update');
 
@@ -819,12 +931,13 @@ export function apply(ctx, config = {}) {
 
     toolsCtx.effect(() => register({
       name: 'issue_comment',
-      description: '给事务追加一条评论（发现、结论、交接说明等），同时会出现在时间线里。评论会直接给人看：写人话，别写工具名（issue_get 这类）、状态码（open/in_review）或版本号（v10）。有截图/产出图时用 images 一起贴上来。',
+      description: '给事务追加一条评论（发现、结论、交接说明等），同时会出现在时间线里。支持通过 replyTo 指定回复某条历史评论并通知原评论作者。评论会直接给人看：写人话，别写工具名（issue_get 这类）、状态码（open/in_review）或版本号（v10）。有截图/产出图时用 images 一起贴上来。',
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
           body: { type: 'string', description: '评论内容' },
+          replyTo: { type: 'integer', description: '可选：要回复那条评论的编号（从事务详情时间线里方括号中的数字读取，如 42）' },
           images: {
             type: 'array',
             items: { type: 'string' },
@@ -836,29 +949,43 @@ export function apply(ctx, config = {}) {
       output: {
         schema: {
           type: 'object',
-          properties: { id: { type: 'integer' }, images: { type: 'integer' } },
+          properties: { id: { type: 'integer' }, images: { type: 'integer' }, replyTo: { type: 'boolean' } },
           additionalProperties: false,
         },
         render: (_args, value) => [{
           type: 'text',
-          text: value?.images ? `评论已添加（含 ${value.images} 张图）。` : '评论已添加。',
+          text: value?.replyTo
+            ? (value?.images ? `回复已添加（含 ${value.images} 张图）。` : '回复已添加。')
+            : (value?.images ? `评论已添加（含 ${value.images} 张图）。` : '评论已添加。'),
         }],
       },
       async execute(args, exec) {
         const issue = store().get(args.id);
-        // 先校验图片和正文，再落库：校验失败不该留下孤儿附件。
+        // 先校验图片、回复目标和正文，再落库：校验失败不该留下孤儿附件。
         const planned = planImages(args.images);
         const text = String(args.body || '').trim();
         if (!text && !planned.length) throw new Error('评论不能为空');
+        const replyToId = args.replyTo !== undefined && args.replyTo !== null ? args.replyTo : null;
+        if (replyToId !== null) {
+          const target = Number.isSafeInteger(replyToId) ? issue.comments.find(c => c.id === replyToId) : null;
+          if (!canReplyComment(target)) {
+            throw failure('INVALID_REPLY_TO', target ? '状态或指派记录不能回复' : '找不到要回复的评论');
+          }
+        }
         const { markdown, attachments } = savePlannedImages({ store, issueId: issue.id, planned });
         const body = [text, markdown].filter(Boolean).join('\n\n');
 
         const actor = caller(exec, nameOf, isMainOf);
-        const value = store().comment(issue.id, { body, authorKind: 'agent', authorName: actor.name });
-        try { notifyMentions(store().get(issue.id), body, exec.agent?.session?.id); } catch { /* best effort */ }
-        const summary = attachments.length ? `新增评论（${attachments.length} 张图）` : '新增评论';
-        try { notifyCounterpart(store().get(issue.id), actor.id, summary); } catch { /* best effort */ }
-        return { id: value.id, images: attachments.length };
+        const value = store().comment(issue.id, {
+          body,
+          authorKind: 'agent',
+          authorName: actor.name,
+          authorSessionId: actor.id || null,
+          replyToId,
+        });
+        const summary = attachments.length ? `新增评论（${attachments.length} 张图）` : (replyToId ? '回复了评论' : '新增评论');
+        await notifyActivity(store().get(issue.id), value, actor.id, summary);
+        return { id: value.id, images: attachments.length, replyTo: Boolean(value.replyToId) };
       },
     }), 'bot-issue: tool comment');
   });
@@ -876,7 +1003,7 @@ export function apply(ctx, config = {}) {
       onSettle: ({ issueId }) => {
         try {
           const full = store().get(issueId);
-          notifyCounterpart(full, full?.assignee?.sessionId || null, '执行人的工作者已交回结果（证据在时间线里），需要你验收');
+          void notifyCounterpart(full, full?.assignee?.sessionId || null, '工作者已交回结果，已转入待验收');
         } catch { /* best effort */ }
       },
     });

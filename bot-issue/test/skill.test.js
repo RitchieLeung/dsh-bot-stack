@@ -30,4 +30,5 @@ test('SKILL.md 说明怎么贴图、怎么看别人贴的图', () => {
   assert.match(md, /read_image/);
   assert.match(md, /绝对路径/);
   assert.match(md, /attachments/);
+  assert.match(md, /system-reminder/);
 });

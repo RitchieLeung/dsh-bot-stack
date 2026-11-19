@@ -41,6 +41,16 @@ ACP agent 可能回报空字符串错误码，`??` 会把空串保留下来，`L
 
 改成用上游已有的 `isContextMessage()` 把这类消息排除出回放——它们是运行时注入，不是对话。
 
+### 7. 主动触发式 Skill 复盘（MCP） — `learning.js` / `skill-retrospect.js` / `work-core.mjs`
+
+**为什么**：原 `learning.js` 以“单轮耗时 ≥ 3 分钟”作为触发信号并每 12 小时定时盲扫，导致工具超时、环境报错排障等耗时对话频繁被误提炼成过时或错误的 Skill，而短回合里的真实纠偏却漏掉。
+
+**改成**：
+- 停用 `learning.js` 中 `agent/status` 的 `minTurnMs >= 3 分钟` 自动入队和后台 `setInterval` 轮询；
+- 拆出 `skill-retrospect.js`，向 `rt.teamTools` 注册团队工具 `skill_retrospect`（Codex CLI 等本地引擎通过 `LoopbackMcp` 自动以 MCP 工具消费），并在 `work-core.mjs` 放行至 `FRONT_TOOLS`（`WORKER_DENY` 屏蔽临时子工作者）；
+- 工具限定 `trigger_type` 为 `issue_rejected` / `negative_feedback`，传入 `issue_id` 时只读查询 `issue.sqlite` 获取真实标题与 `reject` 评论拼入证据；
+- 内置 `evaluateRetrospectGate()` 预留决策入口（当前默认检查无待审卡片即放行），供后续接入 `jev-like` 决策模型控制流。
+
 ## 不是改在这里的问题
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。
