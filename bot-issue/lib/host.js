@@ -320,6 +320,10 @@ const brief = issue => ({ id: issue.id, number: issue.number, title: issue.title
 const statusEnum = [...STATUSES];
 /** `open=待处理、discussing=讨论中…`：给模型看的枚举，人话名字从 store 来，不重复维护。 */
 const statusGloss = STATUSES.map(status => `${status}=${STATUS_LABELS[status]}`).join('、');
+// 模型看到的文案统一用人话状态名（待处理/待验收/已闭环…），不暴露 open/in_review 这类内部码。
+const labelOf = status => STATUS_LABELS[status] || status;
+const KIND_LABELS = { comment: '评论', status: '状态', reject: '打回', assign: '指派', result: '结果' };
+const kindLabelOf = kind => KIND_LABELS[kind] || kind;
 
 export function apply(ctx, config = {}) {
   const { dbPath, statePath, nodesRoot, stagingDir, writebackIntervalMs } = issuePaths(config);
@@ -572,7 +576,7 @@ export function apply(ctx, config = {}) {
       },
       output: {
         schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' } }, additionalProperties: false },
-        render: (_args, value) => [{ type: 'text', text: `已创建 ${value.id}（${value.status}）` }],
+        render: (_args, value) => [{ type: 'text', text: `已创建 ${value.id}（${labelOf(value.status)}）` }],
       },
       async execute(args, exec) {
         const actor = caller(exec, nameOf, isMainOf);
@@ -617,7 +621,7 @@ export function apply(ctx, config = {}) {
             additionalProperties: true,
           },
         },
-        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(t => `#${t.number ?? '?'} ${t.status} ${t.id}  ${t.title}`).join('\n') : '（空）' }],
+        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(t => `#${t.number ?? '?'} ${labelOf(t.status)} ${t.id}  ${t.title}`).join('\n') : '（空）' }],
       },
       async execute(args) {
         return store().list({ status: args.status, parentId: args.parentId, type: args.type }).items.map(brief);
@@ -637,7 +641,7 @@ export function apply(ctx, config = {}) {
         render: (_args, value) => [{
           type: 'text',
           text: [
-            `#${value.number ?? '?'} ${value.title} [${value.status}] v${value.version}`,
+            `#${value.number ?? '?'} ${value.title}【${labelOf(value.status)}】`,
             value.tags?.length ? `标签：${value.tags.join('、')}` : null,
             value.assignee ? `执行人：${value.assignee}` : null,
             value.createdByName ? `创建人：${value.createdByName}` : null,
@@ -679,13 +683,13 @@ export function apply(ctx, config = {}) {
           id: issue.id, number: issue.number, title: issue.title, body: issue.body, status: issue.status,
           type: issue.type, tags: issue.tags, version: issue.version,
           assignee: issue.assignee ? (issue.assignee.name || issue.assignee.sessionId) : null,
-          dependsOn: issue.dependsOn.map(dep => `#${dep.number} ${dep.status} ${dep.title}`),
-          blocks: issue.blocks.map(dep => `#${dep.number} ${dep.status} ${dep.title}`),
+          dependsOn: issue.dependsOn.map(dep => `#${dep.number} ${labelOf(dep.status)} ${dep.title}`),
+          blocks: issue.blocks.map(dep => `#${dep.number} ${labelOf(dep.status)} ${dep.title}`),
           result: issue.result, createdByName: issue.createdByName, createdAt: issue.createdAt, updatedAt: issue.updatedAt,
           commentTotal: comments.length,
           commentsTruncated,
-          comments: shownComments.map(c => `[${c.kind}] ${c.authorName || c.authorKind}（${fmtTime(c.at)}）：${c.body}`),
-          dispatches: issue.dispatches.map(d => `${d.taskId} (${d.status})`),
+          comments: shownComments.map(c => `[${kindLabelOf(c.kind)}] ${c.authorName || c.authorKind}（${fmtTime(c.at)}）：${c.body}`),
+          dispatches: issue.dispatches.map(d => `${d.taskId}（${labelOf(d.status)}）`),
           attachments: staged.attachments,
           attachmentsSkipped: staged.skipped,
         };
@@ -717,7 +721,7 @@ export function apply(ctx, config = {}) {
       },
       output: {
         schema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string' }, version: { type: 'integer' } }, additionalProperties: false },
-        render: (_args, value) => [{ type: 'text', text: `${value.id} → ${value.status} (v${value.version})` }],
+        render: (_args, value) => [{ type: 'text', text: `${value.id} → ${labelOf(value.status)}` }],
       },
       async execute(args, exec) {
         const actor = caller(exec, nameOf, isMainOf);
@@ -813,7 +817,7 @@ export function apply(ctx, config = {}) {
 
     toolsCtx.effect(() => register({
       name: 'issue_comment',
-      description: '给事务追加一条评论（发现、结论、交接说明等），同时会出现在时间线里。有截图/产出图时用 images 一起贴上来。',
+      description: '给事务追加一条评论（发现、结论、交接说明等），同时会出现在时间线里。评论会直接给人看：写人话，别写工具名（issue_get 这类）、状态码（open/in_review）或版本号（v10）。有截图/产出图时用 images 一起贴上来。',
       parameters: {
         type: 'object',
         properties: {

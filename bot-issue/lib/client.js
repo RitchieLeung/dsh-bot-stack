@@ -240,7 +240,10 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
     const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|done|failed|cancelled)\b/g;
     function localizeStatusText(text) {
       if (typeof text !== 'string' || !text) return text;
-      return text.replace(STATUS_WORD_RE, word => STATUS_LABEL[word] || word);
+      return text
+        .replace(STATUS_WORD_RE, word => STATUS_LABEL[word] || word)
+        // 「待验收 v10」→「待验收」：vN 是内部修改计数，别展示给人看。
+        .replace(/(待处理|讨论中|进行中|待验收|已闭环|失败|已取消)\s+[vV]\d+\b/g, '$1');
     }
 
     // 把评论里的 @同事 高亮出来（真正的通知由 host 在写入时 prompt 该同事）。
@@ -1120,7 +1123,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
               h('div', { className: 'is-tl-meta' },
                 `${formatTime(c.at)} · ${authorLabel(c)}`,
                 c.kind !== 'comment' ? h('span', { className: 'is-tl-kind' }, c.kind === 'status' ? '状态' : c.kind === 'result' ? '结果' : c.kind) : null),
-              h('div', { className: 'is-tl-body' }, h(Markdown, { text: c.kind === 'status' ? localizeStatusText(c.body) : c.body, roster, openIssue: onOpenIssue })))) : h('div', { className: 'is-empty' }, '还没有评论。')),
+              h('div', { className: 'is-tl-body' }, h(Markdown, { text: localizeStatusText(c.body), roster, openIssue: onOpenIssue })))) : h('div', { className: 'is-empty' }, '还没有评论。')),
           h('div', { className: 'is-sec' }, '写评论'),
           h(MarkdownField, { rows: 3, value: comment, onChange: setComment, roster, issueId: issue.id, openIssue: onOpenIssue, placeholder: '补充说明、结论或交接信息…（markdown；图片可粘贴/拖入；@同事 会通知他）' }),
           h('div', { style: { marginTop: 10 } },
