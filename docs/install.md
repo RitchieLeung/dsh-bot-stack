@@ -24,7 +24,7 @@ gh release download stack-v0.1.3 \
 node scripts/install.mjs --profile web --dist ./dist --dry-run
 ```
 
-`gh` 只用于下载公开 release；没有 gh 时，也可以在浏览器下载同样三个 tarball、`manifest.json`、`SHA256SUMS` 到 `dist/`。
+`gh` 只用于下载公开 release；没有 gh 时，也可以在浏览器下载 manifest 里列出的全部 tarball、`manifest.json`、`SHA256SUMS` 到 `dist/`。
 
 ## 方式 B：从当前源码构建
 
@@ -34,7 +34,7 @@ npm run pack:release
 node scripts/install.mjs --profile web --dist ./dist --dry-run
 ```
 
-`pack:release` 保留三个包在 package.json 里的正式版本。开发部署使用 `npm run pack`，会生成唯一 prerelease 版本，避免同名同版本被 pnpm 当作已满足而不重装。
+`pack:release` 保留每个包在 package.json 里的正式版本。开发部署使用 `npm run pack`，会生成唯一 prerelease 版本，避免同名同版本被 pnpm 当作已满足而不重装。
 
 ## 正式安装
 
@@ -47,7 +47,7 @@ node scripts/install.mjs --profile web --dist ./dist
 安装器执行：
 
 1. 校验 Node、DSH、manifest 和每个 tarball 的 SHA256。
-2. 备份 profile 的 package/lock/patch 文件和三个已安装 package 目录。
+2. 备份 profile 的 package/lock/patch 文件和全部已安装 package 目录。
 3. 把 tarball 复制到 `~/.dsh/bot/packages/<build>/`，避免依赖临时目录。
 4. 用 `dsh plugin add` 安装，并加 `--ignore-scripts`。
 5. 幂等地把 `dscord`、`dsh-plugin-bot-knowledge`、`dsh-plugin-bot-issue` 加入 `dsh.profile.bundles`。
@@ -81,7 +81,7 @@ node scripts/install.mjs \
 
 - 页面左侧出现 DSCord、事务、知识库。
 - 事务插件启动后，`~/.dsh/bot/issue/tools.json` 的 `registered` 应包含 8 个 `issue_*` 工具，`failed` 为空。
-- Linux 可读取 `http://127.0.0.1:3080/plugins/events`，确认三个 client entry 存在。
+- Linux 可读取 `http://127.0.0.1:3080/plugins/events`，确认每个 client entry 都存在。
 
 ## 升级与回滚
 

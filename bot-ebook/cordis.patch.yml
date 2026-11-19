@@ -1,0 +1,8 @@
+# Bundle patch for dsh-plugin-bot-ebook.
+#
+# 电子书模块与事务、知识库平级：同一个 profile 里各自一条 plugin row。
+# 书稿存本机 ~/.dsh/bot/ebook/ebook.sqlite，导入用 scripts/import-pmpp.mjs。
+
+- insert:
+    - id: bot-ebook
+      name: 'dsh-plugin-bot-ebook'

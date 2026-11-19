@@ -14,6 +14,8 @@ const DEFINITIONS = [
   ['dscord', 'dscord', '0.4.0-alpha.2'],
   ['bot-issue', 'dsh-plugin-bot-issue', '0.1.0'],
   ['bot-knowledge', 'dsh-plugin-bot-knowledge', '0.1.0'],
+  ['bot-restart', 'dsh-plugin-bot-restart', '0.1.0'],
+  ['bot-ebook', 'dsh-plugin-bot-ebook', '0.1.0'],
 ];
 
 function workspace() {
@@ -51,7 +53,7 @@ if (process.env.FAKE_DSH_REQUIRE_OWN_PATH && process.env.PATH.split(':')[0] !== 
 if (args.includes('--version')) { console.log(process.env.FAKE_DSH_VERSION || '0.2.2-rc.1'); process.exit(0); }
 if (args[0] !== 'plugin') process.exit(2);
 const file = args.find(arg => arg.endsWith('.tgz'));
-const name = file.includes('dscord-') ? 'dscord' : file.includes('bot-issue-') ? 'dsh-plugin-bot-issue' : 'dsh-plugin-bot-knowledge';
+const name = file.includes('dscord-') ? 'dscord' : file.includes('bot-issue-') ? 'dsh-plugin-bot-issue' : file.includes('bot-knowledge-') ? 'dsh-plugin-bot-knowledge' : file.includes('bot-restart-') ? 'dsh-plugin-bot-restart' : 'dsh-plugin-bot-ebook';
 if (process.env.FAKE_DSH_LOG) appendFileSync(process.env.FAKE_DSH_LOG, JSON.stringify({ args, name }) + '\\n');
 if (process.env.FAKE_DSH_FAIL_ON && file.includes(process.env.FAKE_DSH_FAIL_ON)) process.exit(42);
 const profile = process.env.FAKE_PROFILE_DIR;
@@ -168,11 +170,11 @@ test('install uses persistent tarballs, activates bundles once, and keeps backup
   const installed = JSON.parse(readFileSync(join(ctx.profileDir, 'package.json'), 'utf8'));
   assert.equal(installed.custom.keep, true);
   const bundles = installed.dsh.profile.bundles;
-  for (const name of ['dscord', 'dsh-plugin-bot-knowledge', 'dsh-plugin-bot-issue']) {
+  for (const name of ['dscord', 'dsh-plugin-bot-knowledge', 'dsh-plugin-bot-issue', 'dsh-plugin-bot-restart', 'dsh-plugin-bot-ebook']) {
     assert.equal(bundles.filter(item => item === name).length, 1);
     assert.ok(installed.dependencies[name].startsWith(`file:${ctx.packagesDir}`));
   }
-  assert.equal(readdirSync(ctx.packagesDir).filter(name => name.endsWith('.tgz')).length, 3);
+  assert.equal(readdirSync(ctx.packagesDir).filter(name => name.endsWith('.tgz')).length, DEFINITIONS.length);
   assert.equal(existsSync(join(ctx.backupRoot, 'profile', 'package.json')), true);
   assert.equal(existsSync(join(ctx.backupRoot, 'installed', 'dscord', 'package.json')), true);
   const calls = readFileSync(ctx.log, 'utf8');

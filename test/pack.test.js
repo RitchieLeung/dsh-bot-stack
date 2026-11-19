@@ -13,6 +13,8 @@ const DEFINITIONS = [
   ['dscord', 'dscord', '0.4.0-alpha.2'],
   ['bot-issue', 'dsh-plugin-bot-issue', '0.1.0'],
   ['bot-knowledge', 'dsh-plugin-bot-knowledge', '0.1.0'],
+  ['bot-restart', 'dsh-plugin-bot-restart', '0.1.0'],
+  ['bot-ebook', 'dsh-plugin-bot-ebook', '0.1.0'],
 ];
 
 function fixtureRoot() {
@@ -39,12 +41,12 @@ function sha(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-test('release pack contains all three packages with source versions and valid SHA256', () => {
+test('release pack contains every stack package with source versions and valid SHA256', () => {
   const root = fixtureRoot();
   const manifest = pack(root, 'release.test', true);
 
   assert.equal(manifest.stack.mode, 'release');
-  assert.equal(manifest.packages.length, 3);
+  assert.equal(manifest.packages.length, DEFINITIONS.length);
   for (const [directory, name, version] of DEFINITIONS) {
     const item = manifest.packages.find(pkg => pkg.directory === directory);
     assert.ok(item, directory);

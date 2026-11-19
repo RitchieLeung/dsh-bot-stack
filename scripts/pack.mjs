@@ -11,6 +11,8 @@ const DEFINITIONS = [
   { directory: 'dscord', name: 'dscord' },
   { directory: 'bot-issue', name: 'dsh-plugin-bot-issue' },
   { directory: 'bot-knowledge', name: 'dsh-plugin-bot-knowledge' },
+  { directory: 'bot-restart', name: 'dsh-plugin-bot-restart' },
+  { directory: 'bot-ebook', name: 'dsh-plugin-bot-ebook' },
 ];
 
 function options(argv) {

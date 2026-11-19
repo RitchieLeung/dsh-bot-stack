@@ -30,9 +30,9 @@ npm run deploy:146
 3. 上传 dist 和安装脚本到 `~/dsh-bot-stack/releases/<build>/`。
 4. 远端 dry-run 校验 Node/DSH/SHA。
 5. 停止 `dsh-web.service`，确认 3080 不再响应。
-6. 备份 profile、三个已安装 package 目录，以及完整的 `~/.dsh/bot`、`~/.dsh/dscord`。
-7. 安装并激活三个 bundle。
-8. 启动服务，最多等待 60 秒：检查新 pid、三个 graph entry、8 个事务工具和 failed 为空。
+6. 备份 profile、全部已安装 package 目录，以及完整的 `~/.dsh/bot`、`~/.dsh/dscord`。
+7. 安装并激活全部 bundle。
+8. 启动服务，最多等待 60 秒：检查新 pid、每个 bundle 的 graph entry、8 个事务工具和 failed 为空。
 9. 健康后更新 `releases/current`，只保留最近 5 个 release。
 
 部署期间 146 会有短暂停机。脚本不会自动 push git，也不会修改本机线上 workspace。
@@ -59,7 +59,7 @@ npm run deploy:146 -- --allow-dirty
 
 1. 停止服务；
 2. 恢复 profile 的 package/lock/patch；
-3. 恢复三个 `node_modules/<package>`；
+3. 恢复全部 `node_modules/<package>`；
 4. 从 `data.tgz` 恢复整个 bot/dscord 数据；
 5. 按旧 lockfile 执行 `pnpm install --frozen-lockfile --ignore-scripts`；
 6. 启动旧版本并做基础健康检查。

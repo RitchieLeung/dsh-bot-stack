@@ -1,0 +1,30 @@
+{
+  "name": "dsh-plugin-bot-ebook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "电子书（ebook）模块：把 markdown 书稿导入本机书库，在面板里按书目/章节翻阅，支持全文搜索与阅读进度；Bot 也能读某一章。",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.10.38"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "import:pmpp": "node scripts/import-pmpp.mjs",
+    "lint": "node scripts/check.mjs",
+    "check": "node scripts/check.mjs && node --test test/*.test.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

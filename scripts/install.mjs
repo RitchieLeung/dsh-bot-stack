@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Install and activate the three stack packages, with rollback on installer failure. */
+/** Install and activate the stack packages, with rollback on installer failure. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
@@ -11,8 +11,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const EXPECTED_DSH = '0.2.2-rc.1';
-const EXPECTED_PACKAGES = ['dscord', 'dsh-plugin-bot-issue', 'dsh-plugin-bot-knowledge'];
-const EXPECTED_BUNDLES = ['dscord', 'dsh-plugin-bot-knowledge', 'dsh-plugin-bot-issue'];
+const EXPECTED_PACKAGES = ['dscord', 'dsh-plugin-bot-issue', 'dsh-plugin-bot-knowledge', 'dsh-plugin-bot-restart', 'dsh-plugin-bot-ebook'];
+const EXPECTED_BUNDLES = ['dscord', 'dsh-plugin-bot-knowledge', 'dsh-plugin-bot-issue', 'dsh-plugin-bot-restart', 'dsh-plugin-bot-ebook'];
 const PROFILE_FILES = ['package.json', 'pnpm-lock.yaml', 'cordis.patch.yml'];
 
 export function assertNodeVersion(version) {
@@ -89,7 +89,7 @@ function loadVerifiedPackages(dist) {
   if (!existsSync(manifestFile)) throw new Error(`缺少 ${manifestFile}，先运行 npm run pack`);
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
   if (!Array.isArray(manifest.packages) || manifest.packages.length !== EXPECTED_PACKAGES.length) {
-    throw new Error('manifest 必须恰好包含三个安装包');
+    throw new Error(`manifest 必须恰好包含 ${EXPECTED_PACKAGES.length} 个安装包`);
   }
   const byName = new Map(manifest.packages.map(item => [item.name, item]));
   for (const name of EXPECTED_PACKAGES) {
@@ -241,7 +241,7 @@ function install(options) {
   } catch (error) {
     try {
       restore(profileDir, backupRoot, saved);
-      console.error('安装中途失败，profile 与三个 package 目录已恢复。');
+      console.error('安装中途失败，profile 与各 package 目录已恢复。');
     } catch (restoreError) {
       console.error(`恢复也失败：${restoreError.message}；备份在 ${backupRoot}`);
     }

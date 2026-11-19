@@ -8,7 +8,7 @@ backup_paths() {
   for file in package.json pnpm-lock.yaml cordis.patch.yml; do
     [ ! -f "$profileDir/$file" ] || cp -a "$profileDir/$file" "$backupDir/profile/$file"
   done
-  for name in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge; do
+  for name in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge dsh-plugin-bot-restart dsh-plugin-bot-ebook; do
     if [ -e "$profileDir/node_modules/$name" ] || [ -L "$profileDir/node_modules/$name" ]; then
       cp -a "$profileDir/node_modules/$name" "$backupDir/installed/$name"
     fi
@@ -25,7 +25,7 @@ restore_paths() {
   for file in package.json pnpm-lock.yaml cordis.patch.yml; do
     [ ! -f "$backupDir/profile/$file" ] || cp -a "$backupDir/profile/$file" "$profileDir/$file"
   done
-  for name in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge; do
+  for name in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge dsh-plugin-bot-restart dsh-plugin-bot-ebook; do
     rm -rf "$profileDir/node_modules/$name"
     if [ -e "$backupDir/installed/$name" ] || [ -L "$backupDir/installed/$name" ]; then
       cp -a "$backupDir/installed/$name" "$profileDir/node_modules/$name"
@@ -42,7 +42,7 @@ basic_health() {
   local service="$1" graph
   sudo -n systemctl is-active --quiet "$service" || return 1
   graph="$(curl -s -m 4 http://127.0.0.1:3080/plugins/events || true)"
-  for id in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge; do
+  for id in dscord dsh-plugin-bot-issue dsh-plugin-bot-knowledge dsh-plugin-bot-restart dsh-plugin-bot-ebook; do
     grep -q "\"id\":\"$id\"" <<<"$graph" || return 1
   done
 }
