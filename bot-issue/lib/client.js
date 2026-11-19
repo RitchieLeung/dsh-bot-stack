@@ -181,6 +181,15 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 .is-chip[data-active="true"]{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, transparent)}
 .is-scrim{display:none}
 .is-nav-btn{display:none}
+.is-modal-scrim{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.42);padding:16px}
+.is-modal{width:min(92vw,460px);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 18px 48px color-mix(in srgb,#000 30%,transparent);padding:16px 18px 14px}
+.is-modal-title{font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary);margin-bottom:4px}
+.is-modal-hint{font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:10px;line-height:1.5}
+.is-modal-input{width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;min-height:96px}
+.is-modal-input:focus{outline:0;border-color:var(--dsw-alias-brand-primary)}
+.is-modal-err{font-size:12px;color:var(--dsw-alias-state-error-primary);margin-top:6px}
+.is-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.is-modal-actions .is-btn{margin-right:0}
 @media (max-width:768px){
 .is-head{flex-wrap:wrap;gap:8px;padding:10px 14px}
 .is-body{padding:12px 14px 20px}
@@ -778,6 +787,64 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
     }
 
     /**
+     * 验收 / 打回意见的浮窗：替代 window.prompt。
+     * 原生 prompt 是浏览器级弹窗，看着像系统事件、样式也不跟主题；这里做成面板内浮窗。
+     */
+    function ReviewDialog({ kind, onSubmit, onCancel }) {
+      const [value, setValue] = React.useState('');
+      const [error, setError] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+      const done = kind === 'done';
+      const title = done ? '验收通过' : '打回重做';
+      const hint = done
+        ? '写清你验证了什么——这条会存成这条事务的闭环结果。'
+        : '写清哪里要重做——这条会写进时间线并知会经办人。';
+      const placeholder = done
+        ? '例如：已在 146 上核对，工具清单与实际一致；…'
+        : '例如：结论没给数据来源，重做并补上截图；…';
+
+      React.useEffect(() => {
+        const onKey = (event) => { if (event.key === 'Escape') onCancel?.(); };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+      }, [onCancel]);
+
+      const submit = async () => {
+        const text = value.trim();
+        if (!text) { setError(done ? '验收必须写意见' : '打回必须写意见'); return; }
+        setError(null);
+        setBusy(true);
+        try { await onSubmit?.(text); }
+        catch (caught) { setError(caught?.message || '提交失败，请重试'); }
+        finally { setBusy(false); }
+      };
+
+      return h('div', {
+        className: 'is-modal-scrim',
+        onMouseDown: event => { if (event.target === event.currentTarget) onCancel?.(); },
+      },
+        h('div', { className: 'is-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+          h('div', { className: 'is-modal-title' }, title),
+          h('div', { className: 'is-modal-hint' }, hint),
+          h('textarea', {
+            className: 'is-modal-input', rows: 4, autoFocus: true, value, placeholder,
+            onChange: event => setValue(event.target.value),
+            onKeyDown: event => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
+            },
+          }),
+          error ? h('div', { className: 'is-modal-err' }, error) : null,
+          h('div', { className: 'is-modal-actions' },
+            h('button', { type: 'button', className: 'is-btn', onClick: () => onCancel?.() }, '取消'),
+            h('button', {
+              type: 'button', className: 'is-btn', 'data-kind': done ? 'primary' : 'danger',
+              disabled: busy, onClick: submit,
+            }, busy ? '提交中…' : (done ? '确认验收' : '确认打回')),
+          ),
+        ));
+    }
+
+    /**
      * 依赖选择器：打开就列候选（不用先打字），
      * 打 `#` 只剩编号、打 `#3` 按编号前缀过滤、打别的词按标题过滤。
      * 之前是「空输入不查、且把 #3 当标题去 LIKE」，所以打 # 什么也出不来。
@@ -965,6 +1032,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       const [started, setStarted] = React.useState(false);
       const [depMode, setDepMode] = React.useState(null); // null | 'dependsOn' | 'blocks'
       const [depBusy, setDepBusy] = React.useState(false);
+      const [review, setReview] = React.useState(null); // null | 'done' | 'reject'：验收/打回意见浮窗
 
       const refresh = React.useCallback(async () => {
         setError(null);
@@ -978,26 +1046,14 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       React.useEffect(() => { refresh(); }, [refresh]);
 
       const act = async (status) => {
+        // 验收 / 打回要写意见：开浮窗，不再用浏览器原生 prompt。
+        if (status === 'done' || status === 'reject') { setReview(status); return; }
         setBusy(true); setNote(null); setError(null);
         try {
           if (status === 'start') {
             const value = await call('start', { id });
             if (value?.dispatched) { setStarted(true); setNote(value.note || '已交给主 Bot'); }
             else setNote(`未派工：${value?.reason || '未知原因'}`);
-          } else if (status === 'done') {
-            const opinion = window.prompt('验收意见（必填，写清你验证了什么）：');
-            if (opinion == null) return;
-            if (!opinion.trim()) { setError(Object.assign(new Error('验收必须写意见'), { code: 'RESULT_REQUIRED' })); return; }
-            await call('update', { id, status: 'done', result: opinion.trim(), authorKind: 'user' });
-            setNote('已验收通过，意见已写入闭环结果');
-            onChanged?.();
-          } else if (status === 'reject') {
-            const opinion = window.prompt('打回意见（必填，会同步给经办人）：');
-            if (opinion == null) return;
-            if (!opinion.trim()) { setError(Object.assign(new Error('打回必须写意见'), { code: 'REJECTION_REQUIRED' })); return; }
-            await call('update', { id, status: 'dispatched', rejection: opinion.trim(), authorKind: 'user' });
-            setNote('已打回重做，意见已写入时间线并知会经办人');
-            onChanged?.();
           } else {
             await call('update', { id, status, authorKind: 'user' });
             setNote(`已更新为「${STATUS_LABEL[status]}」`);
@@ -1005,6 +1061,20 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
           }
           await refresh();
         } catch (caught) { setError(caught); } finally { setBusy(false); }
+      };
+
+      // 浮窗点确认：带意见提交验收/打回。失败抛给浮窗显示，不落面板级 error。
+      const submitReview = async (kind, opinion) => {
+        if (kind === 'done') {
+          await call('update', { id, status: 'done', result: opinion, authorKind: 'user' });
+          setNote('已验收通过，意见已写入闭环结果');
+        } else {
+          await call('update', { id, status: 'dispatched', rejection: opinion, authorKind: 'user' });
+          setNote('已打回重做，意见已写入时间线并知会经办人');
+        }
+        setReview(null);
+        onChanged?.();
+        await refresh();
       };
 
       const saveTags = async (next) => {
@@ -1127,7 +1197,12 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
           h('div', { className: 'is-sec' }, '写评论'),
           h(MarkdownField, { rows: 3, value: comment, onChange: setComment, roster, issueId: issue.id, openIssue: onOpenIssue, placeholder: '补充说明、结论或交接信息…（markdown；图片可粘贴/拖入；@同事 会通知他）' }),
           h('div', { style: { marginTop: 10 } },
-            h('button', { className: 'is-btn', 'data-kind': 'primary', type: 'button', disabled: busy || !comment.trim(), onClick: post }, '提交评论')))));
+            h('button', { className: 'is-btn', 'data-kind': 'primary', type: 'button', disabled: busy || !comment.trim(), onClick: post }, '提交评论')))),
+        review ? h(ReviewDialog, {
+          kind: review,
+          onSubmit: text => submitReview(review, text),
+          onCancel: () => setReview(null),
+        }) : null);
     }
 
     function Panel() {
