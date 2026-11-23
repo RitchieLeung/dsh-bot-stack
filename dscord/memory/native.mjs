@@ -130,14 +130,16 @@ export function installNativeMemory(rt) {
   };
   rt.teamTools.push(defineTool({ name: 'remember', description: 'Save or correct one source-attributed fact in your persistent memory; returns the stored record and sources.', parameters: params, output,
     async execute(args, exec) { const id = caller(exec); const result = await memory.remember(id, args, memory.current(id, exec.agent?.id) || null); news.set(id, Date.now()); return stringify(result); } }));
-  const RECALL_MAX_CHARS = 12_000;
+  const DEFAULT_RECALL_MAX_CHARS = 12_000;
   function boundRecallResult(result) {
+    const pref = rt.state?.prefs?.recallMaxChars;
+    const maxChars = Number.isInteger(pref) && pref >= 2000 && pref <= 60000 ? pref : DEFAULT_RECALL_MAX_CHARS;
     const raw = stringify(result);
-    if (raw.length <= RECALL_MAX_CHARS || !result || !Array.isArray(result.entries)) return raw;
+    if (raw.length <= maxChars || !result || !Array.isArray(result.entries)) return raw;
     const kept = [];
     for (const entry of result.entries) {
       const candidate = stringify({ ...result, entries: [...kept, entry], truncated: true, shown: kept.length + 1, totalReturned: result.entries.length });
-      if (candidate.length > RECALL_MAX_CHARS && kept.length > 0) break;
+      if (candidate.length > maxChars && kept.length > 0) break;
       kept.push(entry);
     }
     return stringify({ ...result, entries: kept, truncated: true, shown: kept.length, totalReturned: result.entries.length, note: 'Result capped to protect context budget; narrow your query/topic/limit to read specific records.' });

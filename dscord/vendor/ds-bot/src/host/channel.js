@@ -185,6 +185,26 @@ export function install(rt) {
       if (body.enterToSend === false) state.prefs.enterToSend = false
       else if (body.enterToSend === true || body.enterToSend === null) delete state.prefs.enterToSend
     }
+    if (body.compactRatio !== undefined) {
+      if (body.compactRatio === null || body.compactRatio === 45) delete state.prefs.compactRatio
+      else if (Number.isInteger(body.compactRatio) && body.compactRatio >= 20 && body.compactRatio <= 90) state.prefs.compactRatio = body.compactRatio
+      else throw invalid('Compact ratio must be a whole percent from 20 to 90')
+    }
+    if (body.compactMaxK !== undefined) {
+      if (body.compactMaxK === null || body.compactMaxK === 120) delete state.prefs.compactMaxK
+      else if (body.compactMaxK === 0 || (Number.isInteger(body.compactMaxK) && body.compactMaxK >= 32 && body.compactMaxK <= 500)) state.prefs.compactMaxK = body.compactMaxK
+      else throw invalid('Compact max tokens must be 0 (unlimited) or a whole number from 32 to 500 (K tokens)')
+    }
+    if (body.frontMaxToolCalls !== undefined) {
+      if (body.frontMaxToolCalls === null || body.frontMaxToolCalls === 6) delete state.prefs.frontMaxToolCalls
+      else if (Number.isInteger(body.frontMaxToolCalls) && body.frontMaxToolCalls >= 0 && body.frontMaxToolCalls <= 50) state.prefs.frontMaxToolCalls = body.frontMaxToolCalls
+      else throw invalid('Front max tool calls must be a whole number from 0 to 50')
+    }
+    if (body.recallMaxChars !== undefined) {
+      if (body.recallMaxChars === null || body.recallMaxChars === 12000) delete state.prefs.recallMaxChars
+      else if (Number.isInteger(body.recallMaxChars) && body.recallMaxChars >= 2000 && body.recallMaxChars <= 60000) state.prefs.recallMaxChars = body.recallMaxChars
+      else throw invalid('Recall max chars must be a whole number from 2000 to 60000')
+    }
     return rt.save()
   }
 

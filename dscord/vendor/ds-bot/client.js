@@ -23302,6 +23302,7 @@ function GeneralPage({ roster, actions, run: run2 }) {
         (0, import_react54.createElement)(Switch, { label: t("Enter sends message"), on: prefs.enterToSend !== false, onChange: (enterToSend) => run2(actions.setPrefs({ enterToSend })) })
       )
     ),
+    (0, import_react54.createElement)(ContextBudgetSection, { key: "budgets", prefs, actions, run: run2 }),
     actions.setSurface ? (0, import_react54.createElement)(
       SetSection,
       { key: "mode", title: t("Mode") },
@@ -23313,6 +23314,94 @@ function GeneralPage({ roster, actions, run: run2 }) {
     ) : null,
     (0, import_react54.createElement)(LocationsSection, { key: "places", actions, run: run2 })
   ];
+}
+function BudgetNumberRow({ label, hint, value, defVal, min, max, unit, onSave }) {
+  const [draft, setDraft] = (0, import_react54.useState)(String(value));
+  (0, import_react54.useEffect)(() => { setDraft(String(value)); }, [value]);
+  const commit = () => {
+    const num = Number.parseInt(draft.trim(), 10);
+    if (!Number.isFinite(num)) { setDraft(String(value)); return; }
+    const clamped = min === 0 && num === 0 ? 0 : Math.max(min === 0 ? 0 : min, Math.min(max, num));
+    setDraft(String(clamped));
+    if (clamped !== value) onSave(clamped);
+  };
+  return (0, import_react54.createElement)(
+    SetRow,
+    { label },
+    (0, import_react54.createElement)(
+      "div",
+      { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+      (0, import_react54.createElement)("input", {
+        type: "number",
+        min,
+        max,
+        value: draft,
+        title: hint,
+        onChange: (e) => setDraft(e.target.value),
+        onBlur: commit,
+        onKeyDown: (e) => { if (e.key === "Enter") { e.currentTarget.blur(); } },
+        style: { width: 84, padding: "4px 8px", borderRadius: 7, border: "1px solid var(--dsw-alias-border-l2, #d4d4d8)", background: "var(--dsw-alias-bg-layer-1, transparent)", color: "inherit", fontSize: 13, fontVariantNumeric: "tabular-nums" }
+      }),
+      unit ? (0, import_react54.createElement)("span", { style: { fontSize: 12, opacity: 0.72 } }, unit) : null,
+      hint ? (0, import_react54.createElement)("span", { style: { fontSize: 11.5, opacity: 0.58 } }, hint) : null,
+      value !== defVal ? (0, import_react54.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => onSave(null) }, t("Reset")) : null
+    )
+  );
+}
+function ContextBudgetSection({ prefs, actions, run: run2 }) {
+  const ratio = Number.isInteger(prefs.compactRatio) ? prefs.compactRatio : 45;
+  const maxK = Number.isInteger(prefs.compactMaxK) ? prefs.compactMaxK : 120;
+  const frontMax = Number.isInteger(prefs.frontMaxToolCalls) ? prefs.frontMaxToolCalls : 6;
+  const recallMax = Number.isInteger(prefs.recallMaxChars) ? prefs.recallMaxChars : 12000;
+  const commitMaxK = (val) => {
+    if (val === null) return run2(actions.setPrefs({ compactMaxK: null }));
+    const next = val === 0 ? 0 : Math.max(32, Math.min(500, val));
+    return run2(actions.setPrefs({ compactMaxK: next }));
+  };
+  return (0, import_react54.createElement)(
+    SetSection,
+    { title: "上下文与预算" },
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "自动压缩比例",
+      value: ratio,
+      defVal: 45,
+      min: 20,
+      max: 90,
+      unit: "%",
+      hint: "20–90%，默认 45%",
+      onSave: (v) => run2(actions.setPrefs({ compactRatio: v }))
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "上下文绝对上限",
+      value: maxK,
+      defVal: 120,
+      min: 0,
+      max: 500,
+      unit: "K tokens",
+      hint: "防 1M 模型膨胀；32–500，0 表示仅按比例",
+      onSave: commitMaxK
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "前台单轮执行工具上限",
+      value: frontMax,
+      defVal: 6,
+      min: 0,
+      max: 50,
+      unit: "次",
+      hint: "超限强制派子 agent（dispatch_work）；0 不限",
+      onSave: (v) => run2(actions.setPrefs({ frontMaxToolCalls: v }))
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "单次 recall 返回上限",
+      value: recallMax,
+      defVal: 12000,
+      min: 2000,
+      max: 60000,
+      unit: "字符",
+      hint: "默认 12000，防止单次记忆召回灌爆上下文",
+      onSave: (v) => run2(actions.setPrefs({ recallMaxChars: v }))
+    })
+  );
 }
 function LocationsSection({ actions, run: run2 }) {
   const app = globalThis.dsBotApp;

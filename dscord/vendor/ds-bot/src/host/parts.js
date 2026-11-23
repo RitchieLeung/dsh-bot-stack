@@ -257,7 +257,20 @@ export function install(rt) {
     const route = session.requestHeader()?.config
     if (!route?.provider || !route?.model) return undefined
     const info = await ctx.llm.resolveModelInfo(route.provider, route.model)
-    return linesFor({ window: info.context?.contextWindow, reserve: route.maxTokens ?? info.defaultMaxTokens, checkRatio: config.checkRatio })
+    const prefs = state?.prefs ?? {}
+    const prefRatio = Number.isInteger(prefs.compactRatio) && prefs.compactRatio >= 20 && prefs.compactRatio <= 90
+      ? prefs.compactRatio / 100
+      : config.checkRatio
+    const maxK = prefs.compactMaxK
+    const maxCheckTokens = maxK === 0 ? Infinity : (Number.isInteger(maxK) && maxK >= 32 && maxK <= 500 ? maxK * 1000 : undefined)
+    const maxHardTokens = maxK === 0 ? Infinity : (maxCheckTokens !== undefined ? Math.round(maxCheckTokens * 4 / 3) : undefined)
+    return linesFor({
+      window: info.context?.contextWindow,
+      reserve: route.maxTokens ?? info.defaultMaxTokens,
+      checkRatio: prefRatio,
+      maxCheckTokens,
+      maxHardTokens,
+    })
   }
 
   // The backend's own entry points leave Bot Sessions alone, earlier parts and group

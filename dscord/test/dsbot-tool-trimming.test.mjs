@@ -139,4 +139,48 @@ test('steward linesFor triggers compaction at 45% and caps 1M-window models at 1
   const huge = linesFor({ window: 1_000_000, reserve: 32_000 });
   assert.equal(huge.check, 120_000);
   assert.equal(huge.hard, 160_000);
+
+  // Explicit Infinity disables absolute cap (percent-only mode when user sets compactMaxK = 0)
+  const uncapped = linesFor({ window: 1_000_000, reserve: 0, checkRatio: 0.45, maxCheckTokens: Infinity, maxHardTokens: Infinity });
+  assert.equal(uncapped.check, 450_000);
+  assert.equal(uncapped.hard, 650_000);
+});
+
+test('WorkCore.guard enforces configurable frontMaxToolCalls from state.prefs and resets on turn/start', async () => {
+  const { WorkCore } = await import('../dsh-connect/work-core.mjs');
+  const prefs = { frontMaxToolCalls: 3 };
+  let turnListener = null;
+  const ctx = {
+    tools: { guard: () => () => {} },
+    on: (ev, fn) => { if (ev === 'session/event') turnListener = fn; return () => {}; },
+  };
+  const core = new WorkCore({
+    ctx,
+    native: { runtime: { state: { prefs } } },
+    node: { id: 'n1', nativeBotId: 'bot-1' },
+    state: {},
+    save: () => {},
+  });
+  core.frontSessions.add('s-front');
+
+  const execOf = (name) => ({ name, agent: { session: { id: 's-front' } } });
+  // FRONT_TOOLS never consume the budget
+  assert.equal(core.guard(execOf('issue_get')), undefined);
+  assert.equal(core.guard(execOf('dispatch_work')), undefined);
+  // First 3 execution calls pass; 4th is blocked with dispatch_work guidance
+  assert.equal(core.guard(execOf('bash')), undefined);
+  assert.equal(core.guard(execOf('edit')), undefined);
+  assert.equal(core.guard(execOf('bash')), undefined);
+  const blocked = core.guard(execOf('bash'));
+  assert.match(blocked, /上限（3 次）/);
+  assert.match(blocked, /dispatch_work/);
+
+  // New turn resets counter
+  turnListener({ id: 's-front' }, { type: 'turn/start' });
+  assert.equal(core.guard(execOf('bash')), undefined);
+
+  // Setting frontMaxToolCalls = 0 disables the guard live without restart
+  prefs.frontMaxToolCalls = 0;
+  for (let i = 0; i < 10; i++) assert.equal(core.guard(execOf('bash')), undefined);
+  core.dispose();
 });

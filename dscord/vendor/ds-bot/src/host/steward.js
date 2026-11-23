@@ -26,8 +26,8 @@ export function linesFor({ window, reserve, checkRatio, maxCheckTokens, maxHardT
   const declared = Number.isInteger(window) && window > 0 ? window : DEFAULT_WINDOW
   const room = Number.isInteger(reserve) && reserve > 0 ? reserve : 0
   const usable = Math.max(declared - room, Math.floor(declared / 2))
-  const hardCap = Number.isInteger(maxHardTokens) && maxHardTokens > 0 ? maxHardTokens : MAX_HARD_TOKENS
-  const checkCap = Number.isInteger(maxCheckTokens) && maxCheckTokens > 0 ? maxCheckTokens : MAX_CHECK_TOKENS
+  const hardCap = maxHardTokens === Infinity ? Infinity : (Number.isInteger(maxHardTokens) && maxHardTokens > 0 ? maxHardTokens : MAX_HARD_TOKENS)
+  const checkCap = maxCheckTokens === Infinity ? Infinity : (Number.isInteger(maxCheckTokens) && maxCheckTokens > 0 ? maxCheckTokens : MAX_CHECK_TOKENS)
   const hard = Math.min(Math.floor(usable * HARD_SHARE), hardCap)
   const ratio = typeof checkRatio === 'number' && checkRatio > 0 && checkRatio < 1 ? checkRatio : DEFAULT_CHECK_RATIO
   return { window: declared, usable, hard, check: Math.min(Math.floor(usable * ratio), checkCap, hard) }

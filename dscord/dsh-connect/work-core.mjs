@@ -38,6 +38,7 @@ export const WORKER_DENY = new Set([
 export const CARD_TOOLS = new Set(['ask_user', 'ask_user_question', 'show_view']);
 export const CARD_REFUSAL = '这里是聊天，没有卡片界面。要问对方，就把问题直接写在这一轮的回复里；工作者用 work_ask。';
 export const FRONT_REFUSAL = '前台不直接做这件事。用 dispatch_work 把它交给工作者，然后告诉对方已经开始。';
+export const DEFAULT_FRONT_MAX_TOOL_CALLS = 6;
 
 const output = { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] };
 const textOf = message => (message?.content || []).filter(block => block.type === 'text').map(block => block.text).join('');
@@ -146,6 +147,7 @@ export class WorkCore {
     Object.assign(this, { ctx, native, node, state, save, maxWorkers, timeoutMs });
     this.state.tasks ||= {};
     this.frontSessions = new Set();
+    this.frontToolCounts = new Map();
     this.frontBusy = false;
     this.frontDoing = null;
     this.frontSince = null;
@@ -161,16 +163,39 @@ export class WorkCore {
       if (!ended(task)) mark(task, 'unknown', 'restart', { summary: '宿主重启时任务未结束，结果不确定。', finishedAt: new Date().toISOString(), notified: false, doing: undefined });
     }
     this.disposeGuard = ctx.tools?.guard?.(exec => this.guard(exec));
+    this.disposeTurnWatch = ctx.on?.('session/event', (session, event) => {
+      if (event?.type === 'turn/start' && session?.id && this.frontSessions.has(session.id)) {
+        this.frontToolCounts.delete(session.id);
+      }
+    });
     if (node.nativeBotId) cores.set(node.nativeBotId, this);
   }
 
   tasks() { return Object.values(this.state.tasks); }
   workerTask(sessionId) { return this.tasks().find(task => task.sessionId === sessionId && !ended(task)); }
 
+  frontMaxToolCalls() {
+    const pref = this.native?.runtime?.state?.prefs?.frontMaxToolCalls;
+    if (Number.isInteger(pref) && pref >= 0 && pref <= 50) return pref;
+    return DEFAULT_FRONT_MAX_TOOL_CALLS;
+  }
+
   guard(exec) {
     const id = exec.agent?.session?.id ?? exec.agent?.id;
     if (CARD_TOOLS.has(exec.name) && (this.frontSessions.has(id) || this.workerTask(id))) return CARD_REFUSAL;
     if (this.workerTask(id) && WORKER_DENY.has(exec.name)) return '工作者只做事并用 work_report 汇报，不直接对外说话或改团队设置。';
+    if (this.frontSessions.has(id) && !FRONT_TOOLS.has(exec.name)) {
+      const limit = this.frontMaxToolCalls();
+      if (limit > 0) {
+        const turnKey = exec.turn ?? null;
+        const entry = this.frontToolCounts.get(id);
+        const count = entry && (turnKey === null || entry.turn === turnKey) ? entry.count : 0;
+        if (count >= limit) {
+          return `前台本轮执行类工具已达上限（${limit} 次）。多步或耗时任务请立即调用 dispatch_work 派给独立工作者（新上下文）执行，不要在前台继续硬干。`;
+        }
+        this.frontToolCounts.set(id, { turn: turnKey, count: count + 1 });
+      }
+    }
     return undefined;
   }
 
@@ -699,6 +724,7 @@ export class WorkCore {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.disposeGuard?.();
+    this.disposeTurnWatch?.();
     if (cores.get(this.node.nativeBotId) === this) cores.delete(this.node.nativeBotId);
   }
 }
