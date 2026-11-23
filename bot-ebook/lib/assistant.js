@@ -28,7 +28,7 @@ export function extractAnswer(records) {
   return parts.join('\n\n').trim();
 }
 
-export function createAssistant({ agents, sessionController, model, store, cwd, makeId = defaultId }) {
+export function createAssistant({ agents, sessionController, model, store, cwd, tools = [], makeId = defaultId }) {
   const sessions = new Map(); // bookId -> sessionId
   const cursors = new Map(); // bookId -> last seen seq
 
@@ -42,6 +42,9 @@ export function createAssistant({ agents, sessionController, model, store, cwd, 
       meta: cwd ? { cwd } : {},
       agentOptions: { provider: model.provider, model: model.model },
       setup: (agentCtx) => {
+        if (typeof agentCtx.tools?.register === 'function') {
+          for (const def of tools) agentCtx.tools.register(def);
+        }
         agentCtx.systemPrompt.section({
           name: 'ebook-assistant',
           order: 9000,

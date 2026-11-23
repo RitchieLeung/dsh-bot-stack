@@ -25,6 +25,18 @@ const DELEGATION_TOOLS = ['subagent', 'subagent_fork', 'subagent_codex', 'subage
 // scope, so each group is masked on its own.
 const HIDDEN_TOOL_GROUPS = [[BLOCKING_QUESTION_TOOL, ...GOAL_TOOLS], DELEGATION_TOOLS]
 const HIDDEN_TOOLS = HIDDEN_TOOL_GROUPS.flat()
+// Local agent CLIs (Codex, Claude Code, ACP) already ship their own shell/file/web
+// tools and never receive DSH's copies through the MCP bridge; masking them on the
+// DSH session keeps request/header.tools and session logs free of dead schemas.
+const LOCAL_AGENT_REDUNDANT_TOOLS = new Set([
+  'bash', 'read', 'write', 'edit', 'apply_patch', 'multi_edit',
+  'glob', 'grep', 'ls', 'list_dir', 'search_files', 'working_directory',
+  'web_fetch', 'web_search', 'read_image', 'todo_write', 'todo_read', 'notebook_edit',
+  ...HIDDEN_TOOLS,
+])
+// Team management tools whose execute() unconditionally rejects non-Main Bots;
+// omit them from non-Main Bot scopes so their schemas do not bloat every turn.
+const MAIN_ONLY_TOOLS = new Set(['create_bot', 'stop_bot', 'create_group', 'delete_group'])
 // The guidance DSH writes into the prompt for the hidden tools. Agent Teams makes
 // every root Session a Team Lead and tells it to spawn teammates in `team:policy`;
 // its `team:identity` context is required, so DSH puts it back after any filter.
@@ -767,7 +779,7 @@ export function install(rt) {
     const held = scoped.get(id)
     if (held === undefined) return
     scoped.delete(id)
-    for (const dispose of held.disposers) {
+    for (const dispose of [...held.disposers, ...(held.connectorLifts ?? []), ...(held.localAgentLifts ?? [])]) {
       try {
         dispose()
       } catch (error) {
@@ -803,10 +815,12 @@ export function install(rt) {
     // can move onto or off a local route after its Agent exists.
     const self = owns ? rt.botOf(rt.selfOf(id)) : undefined
     const localBot = rt.isLocalAgentRef?.(self?.appliedModel ?? self?.model) === true
+    const isMain = self !== undefined && rt.isMain(self.id)
     // A Session that left the team, a scope of the wrong kind, a fresh Agent
     // for one Session, or a Bot that changed between a local route and a model
-    // all start over; a wanted scope is registered again below.
-    if (held !== undefined && (!wanted || held.agent !== agent || held.relay !== relayOnly || (held.tools === true && held.local !== localBot))) {
+    // (or gained/lost the Main Bot role) all start over; a wanted scope is
+    // registered again below.
+    if (held !== undefined && (!wanted || held.agent !== agent || held.relay !== relayOnly || (held.tools === true && (held.local !== localBot || held.isMain !== isMain)))) {
       unscope(id)
       held = undefined
     }
@@ -823,6 +837,7 @@ export function install(rt) {
     const registered = []
     for (const def of [...rt.teamTools, ...(localBot ? (rt.localAgentTools ?? []) : [])]) {
       if (relayOnly && def.name !== 'group_relay') continue
+      if (!relayOnly && !isMain && MAIN_ONLY_TOOLS.has(def.name)) continue
       try {
         const dispose = agent.ctx.tools.register(def)
         if (typeof dispose === 'function') {
@@ -842,6 +857,7 @@ export function install(rt) {
     held.relay = relayOnly
     held.tools = true
     held.local = localBot
+    held.isMain = isMain
     held.disposers.push(...disposers)
     scoped.set(id, held)
     // A scope made outside creation never reached a collected tool list; the
@@ -918,10 +934,33 @@ export function install(rt) {
       } catch { /* a scoped name cannot be restricted; connectors are global */ }
     }
   }
+  // Mask DSH native file/shell/web/delegation tools on local CLI agent Bots
+  // (codex-cli, claude-code, acp): the CLI already provides its own and never
+  // receives DSH's copies over the MCP bridge. Lifts automatically if the Bot
+  // switches back to a native LLM model.
+  const maskLocalAgentRedundantTools = (agent, held) => {
+    if (typeof agent.ctx?.tools?.restrict !== 'function' || typeof ctx.tools?.schemas !== 'function') return
+    const self = rt.botOf(rt.selfOf(agent.session?.id))
+    const localBot = rt.isLocalAgentRef?.(self?.appliedModel ?? self?.model) === true
+    const served = localBot ? new Set(ctx.tools.schemas(agent).map(schema => schema.name)) : new Set()
+    const deny = localBot ? [...served].filter(name => LOCAL_AGENT_REDUNDANT_TOOLS.has(name)) : []
+    const before = held.localAgentDenied ?? new Set()
+    if (deny.length === before.size && deny.every(name => before.has(name))) return
+    for (const lift of held.localAgentLifts ?? []) { try { lift() } catch { /* already lifted */ } }
+    held.localAgentLifts = []
+    held.localAgentDenied = new Set(deny)
+    for (const name of deny) {
+      try {
+        const lift = agent.ctx.tools.restrict({ deny: [name] })
+        if (typeof lift === 'function') held.localAgentLifts.push(lift)
+      } catch { /* scoped names cannot be restricted */ }
+    }
+  }
   const reapplyToolMasks = () => {
     for (const held of scoped.values()) {
       if (held.agent === undefined) continue
       try { maskConnectorTools(held.agent, held) } catch (error) { rt.warn('ds-bot: connector mask failed: %s', error) }
+      try { maskLocalAgentRedundantTools(held.agent, held) } catch (error) { rt.warn('ds-bot: local-agent tool mask failed: %s', error) }
     }
   }
 
@@ -960,9 +999,13 @@ export function install(rt) {
   const hideBotUnusedTools = (agent) => {
     shareBotTools(agent)
     const id = agent?.session?.id
+    const selfBot = rt.isBotSession(id) ? rt.botOf(rt.selfOf(id)) : undefined
+    const isLocalBot = rt.isLocalAgentRef?.(selfBot?.appliedModel ?? selfBot?.model) === true
     // The shell shadows go with the scope, so a reload or a Session that leaves
     // the team lifts them like the rest, and the Agent can be scoped again.
-    const shadows = rt.shadowShells?.(agent) ?? []
+    // Skip shadowing DSH's shell tools on local CLI Bots (Codex/Claude/ACP) so
+    // maskLocalAgentRedundantTools can cleanly restrict `bash` without a scoped collision.
+    const shadows = isLocalBot ? [] : (rt.shadowShells?.(agent) ?? [])
     if (shadows.length > 0) {
       const held = scoped.get(id) ?? { relay: false, tools: false, restricted: false, filtered: false, disposers: [], unlisted: new Set() }
       held.agent = agent
@@ -980,6 +1023,7 @@ export function install(rt) {
       }
     }
     maskConnectorTools(agent, held)
+    maskLocalAgentRedundantTools(agent, held)
   }
   ctx.on('tools/change', () => reapplyToolMasks())
   // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the

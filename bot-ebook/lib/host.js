@@ -61,6 +61,78 @@ function decodeBody(data) {
 
 const decodeText = bytes => new TextDecoder().decode(bytes);
 
+/** 构建电子书检索工具定义：仅挂到电子书阅读助手的专属会话，不再全局注入所有 Bot。 */
+export function createEbookTools(store) {
+  return [
+    {
+      name: 'ebook_list',
+      description: '列出电子书库里的书（书名、作者、章节数）。给 bookId 时列出这本书的章节目录，读某一章用 ebook_read。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bookId: { type: 'string', description: '书的 id；不传则列全部书目' },
+        },
+      },
+      output: {
+        schema: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(line => line.text).join('\n') : '（书库是空的）' }],
+      },
+      async execute(args) {
+        if (args.bookId) {
+          const { chapters } = store().getBook(args.bookId);
+          return chapters.map(chapter => ({ idx: chapter.idx, title: chapter.title, groupName: chapter.groupName, chars: chapter.chars, text: `[${chapter.idx}] ${chapter.groupName ? `(${chapter.groupName}) ` : ''}${chapter.title} · ${chapter.chars} 字` }));
+        }
+        return store().listBooks().map(book => ({
+          id: book.id, title: book.title, chapters: book.chapterCount,
+          text: `${book.id} · ${book.title}${book.author ? ` — ${book.author}` : ''} · ${book.chapterCount} 章 / ${Math.round(book.chars / 1000)}k 字`,
+        }));
+      },
+    },
+    {
+      name: 'ebook_read',
+      description: '读电子书的一章，返回 markdown 原文（超过 12000 字会截断并提示）。先用 ebook_list 拿 bookId 和章节序号 idx。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bookId: { type: 'string', description: '书的 id' },
+          idx: { type: 'integer', description: '章节序号（从 0 开始，ebook_list 里有）' },
+        },
+        required: ['bookId', 'idx'],
+      },
+      output: {
+        schema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, truncated: { type: 'boolean' } }, additionalProperties: false },
+        render: (_args, value) => [{ type: 'text', text: `# ${value.title}\n\n${value.body}${value.truncated ? '\n\n…（已截断，完整内容请在「电子书」面板里读）' : ''}` }],
+      },
+      async execute(args) {
+        const { chapter } = store().getChapter(args.bookId, Number(args.idx) || 0);
+        const truncated = chapter.body.length > READ_LIMIT;
+        return { title: chapter.title, body: truncated ? chapter.body.slice(0, READ_LIMIT) : chapter.body, truncated };
+      },
+    },
+    {
+      name: 'ebook_search',
+      description: '在电子书库里全文搜索一个词，返回命中的章节和上下文片段。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要搜的词' },
+          bookId: { type: 'string', description: '只在这本书里搜（可选）' },
+          limit: { type: 'integer', description: '最多返回几条，默认 10' },
+        },
+        required: ['query'],
+      },
+      output: {
+        schema: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(hit => `[${hit.idx}] ${hit.title}\n    ${hit.snippet}`).join('\n') : '（没有命中）' }],
+      },
+      async execute(args) {
+        const result = store().search(args.query, { bookId: args.bookId, limit: Number(args.limit) || 10 });
+        return result.hits.map(hit => ({ ...hit, text: `[${hit.idx}] ${hit.title} · ${hit.snippet}` }));
+      },
+    },
+  ];
+}
+
 export function apply(ctx, config = {}) {
   const { dbPath } = ebookPaths(config);
   let opened = null;
@@ -261,6 +333,7 @@ export function apply(ctx, config = {}) {
     model,
     store,
     cwd: path.dirname(dbPath),
+    tools: createEbookTools(store),
   });
   const models = async () => {
     try { return await ctx.sessionController.modelCatalog(); } catch { return { groups: [] }; }
@@ -282,77 +355,4 @@ export function apply(ctx, config = {}) {
       return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
     },
   }), 'bot-ebook: HTTP route');
-
-  ctx.inject(['tools'], toolsCtx => {
-    const register = def => toolsCtx.tools.register(def);
-
-    toolsCtx.effect(() => register({
-      name: 'ebook_list',
-      description: '列出电子书库里的书（书名、作者、章节数）。给 bookId 时列出这本书的章节目录，读某一章用 ebook_read。',
-      parameters: {
-        type: 'object',
-        properties: {
-          bookId: { type: 'string', description: '书的 id；不传则列全部书目' },
-        },
-      },
-      output: {
-        schema: { type: 'array', items: { type: 'object', additionalProperties: true } },
-        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(line => line.text).join('\n') : '（书库是空的）' }],
-      },
-      async execute(args) {
-        if (args.bookId) {
-          const { book, chapters } = store().getBook(args.bookId);
-          return chapters.map(chapter => ({ idx: chapter.idx, title: chapter.title, groupName: chapter.groupName, chars: chapter.chars, text: `[${chapter.idx}] ${chapter.groupName ? `(${chapter.groupName}) ` : ''}${chapter.title} · ${chapter.chars} 字` }));
-        }
-        return store().listBooks().map(book => ({
-          id: book.id, title: book.title, chapters: book.chapterCount,
-          text: `${book.id} · ${book.title}${book.author ? ` — ${book.author}` : ''} · ${book.chapterCount} 章 / ${Math.round(book.chars / 1000)}k 字`,
-        }));
-      },
-    }), 'bot-ebook: tool list');
-
-    toolsCtx.effect(() => register({
-      name: 'ebook_read',
-      description: '读电子书的一章，返回 markdown 原文（超过 12000 字会截断并提示）。先用 ebook_list 拿 bookId 和章节序号 idx。',
-      parameters: {
-        type: 'object',
-        properties: {
-          bookId: { type: 'string', description: '书的 id' },
-          idx: { type: 'integer', description: '章节序号（从 0 开始，ebook_list 里有）' },
-        },
-        required: ['bookId', 'idx'],
-      },
-      output: {
-        schema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, truncated: { type: 'boolean' } }, additionalProperties: false },
-        render: (_args, value) => [{ type: 'text', text: `# ${value.title}\n\n${value.body}${value.truncated ? '\n\n…（已截断，完整内容请在「电子书」面板里读）' : ''}` }],
-      },
-      async execute(args) {
-        const { chapter } = store().getChapter(args.bookId, Number(args.idx) || 0);
-        const truncated = chapter.body.length > READ_LIMIT;
-        return { title: chapter.title, body: truncated ? chapter.body.slice(0, READ_LIMIT) : chapter.body, truncated };
-      },
-    }), 'bot-ebook: tool read');
-
-    toolsCtx.effect(() => register({
-      name: 'ebook_search',
-      description: '在电子书库里全文搜索一个词，返回命中的章节和上下文片段。',
-      parameters: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: '要搜的词' },
-          bookId: { type: 'string', description: '只在这本书里搜（可选）' },
-          limit: { type: 'integer', description: '最多返回几条，默认 10' },
-        },
-        required: ['query'],
-      },
-      output: {
-        schema: { type: 'array', items: { type: 'object', additionalProperties: true } },
-        render: (_args, value) => [{ type: 'text', text: value.length ? value.map(hit => `[${hit.idx}] ${hit.title}\n    ${hit.snippet}`).join('\n') : '（没有命中）' }],
-      },
-      async execute(args) {
-        const result = store().search(args.query, { bookId: args.bookId, limit: Number(args.limit) || 10 });
-        return result.hits.map(hit => ({ ...hit, text: `[${hit.idx}] ${hit.title} · ${hit.snippet}` }));
-      },
-    }), 'bot-ebook: tool search');
-  });
 }

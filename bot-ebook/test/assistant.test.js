@@ -25,7 +25,8 @@ function make() {
   };
   const store = () => ({ getBook: (id) => ({ book: { id, title: '测试书' } }) });
   const model = { provider: 'deepseek-official', model: 'deepseek-flash' };
-  return { assistant: createAssistant({ agents, sessionController, model, store, makeId: (id, kind) => `${kind}-${id}` }), created, prompted, waited };
+  const tools = [{ name: 'ebook_list' }, { name: 'ebook_read' }, { name: 'ebook_search' }];
+  return { assistant: createAssistant({ agents, sessionController, model, store, tools, makeId: (id, kind) => `${kind}-${id}` }), created, prompted, waited };
 }
 
 test('extractAnswer 从 records 里取出 assistant 文本', () => {
@@ -50,13 +51,18 @@ test('ensureSession 建 agent 并复用，setup 锚定本书', async () => {
   assert.equal(options.agentOptions.provider, 'deepseek-official');
   assert.equal(options.agentOptions.model, 'deepseek-flash');
   assert.equal(typeof options.setup, 'function');
-  // setup 应当往 scoped context 注册了系统指令
-  const agentCtx = { systemPrompt: { section: (s) => { sectionCalled = s; } } };
+  // setup 应当往 scoped context 注册了系统指令和专属电子书工具
+  const registeredTools = [];
+  const agentCtx = {
+    systemPrompt: { section: (s) => { sectionCalled = s; } },
+    tools: { register: (def) => { registeredTools.push(def.name); } },
+  };
   let sectionCalled = null;
   options.setup(agentCtx);
   assert.ok(sectionCalled, 'setup 应注册系统指令');
   assert.match(sectionCalled.text(), /测试书/);
   assert.match(sectionCalled.text(), /ebook_read/);
+  assert.deepEqual(registeredTools, ['ebook_list', 'ebook_read', 'ebook_search']);
 });
 
 test('ask 投递问题、wait、返回答案', async () => {

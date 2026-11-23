@@ -63,11 +63,11 @@ test('declares the connection injection (without it a cold boot fails to activat
   }
 });
 
-test('host registers the HTTP route and three tools', () => {
+test('host registers the HTTP route and does NOT pollute global tools', () => {
   const { routes, tools, effects } = setup();
   assert.equal(routes.length, 1);
   assert.equal(routes[0].path, '/api/bot-ebook');
-  assert.deepEqual(tools.map(tool => tool.name), ['ebook_list', 'ebook_read', 'ebook_search']);
+  assert.deepEqual(tools, [], 'ebook_* 工具只应挂到电子书阅读助手会话，不应全局注册给所有 Bot');
   assert.ok(effects.includes('bot-ebook: HTTP route'));
 });
 
@@ -84,35 +84,47 @@ test('the route answers meta and chapter requests', async () => {
 });
 
 test('ebook_list returns the shelf, then the chapters of one book', async () => {
-  const { tools } = setup();
-  const list = tools.find(tool => tool.name === 'ebook_list');
-  const shelf = await list.execute({});
-  assert.equal(shelf.length, 1);
-  assert.match(shelf[0].text, /演示书/);
-  const chapters = await list.execute({ bookId: 'demo' });
-  assert.equal(chapters.length, 2);
-  assert.match(chapters[1].text, /第七章：卷积/);
+  const { dbPath } = setup();
+  const store = openEbookStore({ dbPath });
+  try {
+    const tools = host.createEbookTools(() => store);
+    const list = tools.find(tool => tool.name === 'ebook_list');
+    const shelf = await list.execute({});
+    assert.equal(shelf.length, 1);
+    assert.match(shelf[0].text, /演示书/);
+    const chapters = await list.execute({ bookId: 'demo' });
+    assert.equal(chapters.length, 2);
+    assert.match(chapters[1].text, /第七章：卷积/);
+  } finally { store.close(); }
 });
 
 test('ebook_read returns the body and flags truncation', async () => {
-  const { tools } = setup();
-  const read = tools.find(tool => tool.name === 'ebook_read');
-  const value = await read.execute({ bookId: 'demo', idx: 1 });
-  assert.match(value.title, /卷积/);
-  assert.match(value.body, /归约/);
-  assert.equal(value.truncated, false);
-  const rendered = read.output.render({}, value);
-  assert.match(rendered[0].text, /# 第七章：卷积/);
+  const { dbPath } = setup();
+  const store = openEbookStore({ dbPath });
+  try {
+    const tools = host.createEbookTools(() => store);
+    const read = tools.find(tool => tool.name === 'ebook_read');
+    const value = await read.execute({ bookId: 'demo', idx: 1 });
+    assert.match(value.title, /卷积/);
+    assert.match(value.body, /归约/);
+    assert.equal(value.truncated, false);
+    const rendered = read.output.render({}, value);
+    assert.match(rendered[0].text, /# 第七章：卷积/);
+  } finally { store.close(); }
 });
 
 test('ebook_search returns hits with snippets', async () => {
-  const { tools } = setup();
-  const search = tools.find(tool => tool.name === 'ebook_search');
-  const hits = await search.execute({ query: '归约' });
-  assert.equal(hits.length, 1);
-  assert.match(hits[0].snippet, /归约/);
-  const rendered = search.output.render({}, hits);
-  assert.match(rendered[0].text, /\[1\]/);
+  const { dbPath } = setup();
+  const store = openEbookStore({ dbPath });
+  try {
+    const tools = host.createEbookTools(() => store);
+    const search = tools.find(tool => tool.name === 'ebook_search');
+    const hits = await search.execute({ query: '归约' });
+    assert.equal(hits.length, 1);
+    assert.match(hits[0].snippet, /归约/);
+    const rendered = search.output.render({}, hits);
+    assert.match(rendered[0].text, /\[1\]/);
+  } finally { store.close(); }
 });
 
 test('ebookPaths honours config and DSH_HOME', () => {
