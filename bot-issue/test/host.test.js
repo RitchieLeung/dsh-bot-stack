@@ -131,7 +131,7 @@ test('start refuses to re-dispatch an issue already assigned to an executor', as
   const created = await post(fetch, { action: 'create', title: 'X' });
   const id = created.value.issue.id;
   await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
-  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  await post(fetch, { action: 'update', id, status: 'dispatched', note: '开始执行' });
   prompts.length = 0;
   const started = await post(fetch, { action: 'start', id });
   assert.equal(started.value.dispatched, false);
@@ -149,7 +149,7 @@ test('没有执行人的 dispatched 老事务允许重派', async () => {
   const fetch = routes[0].fetch;
   const created = await post(fetch, { action: 'create', title: 'X' });
   const id = created.value.issue.id;
-  await post(fetch, { action: 'update', id, status: 'dispatched' }); // 手动标 dispatched，没有执行人
+  await post(fetch, { action: 'update', id, status: 'dispatched', note: '手动标进行中' }); // 手动标 dispatched，没有执行人
   const started = await post(fetch, { action: 'start', id });
   assert.equal(started.value.dispatched, true);
 });
@@ -189,8 +189,8 @@ test('面板打回且没有执行人时，以事件卡片和 system-reminder 知
   const fetch = routes[0].fetch;
   const created = await post(fetch, { action: 'create', title: '看图' });
   const id = created.value.issue.id;
-  await post(fetch, { action: 'update', id, status: 'dispatched' });
-  await post(fetch, { action: 'update', id, status: 'in_review' });
+  await post(fetch, { action: 'update', id, status: 'dispatched', note: '开始执行' });
+  await post(fetch, { action: 'update', id, status: 'in_review', note: '提交验收' });
   messages.length = 0;
   await post(fetch, { action: 'update', id, status: 'dispatched', rejection: '事情没完成' });
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -214,10 +214,10 @@ test('执行人用别的会话 id 报回时也能知会主 Bot（会话漂移）
   const created = await post(fetch, { action: 'create', title: 'X' });
   const id = created.value.issue.id;
   await post(fetch, { action: 'assign', id, sessionId: 'session-kiki', name: 'kiki' });
-  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  await post(fetch, { action: 'update', id, status: 'dispatched', note: '开始执行' });
   prompts.length = 0;
   const upd = tools.find(t => t.name === 'issue_update');
-  await upd.execute({ id, status: 'in_review' }, { agent: { session: { id: 'session-kiki-seg' } } });
+  await upd.execute({ id, status: 'in_review', note: '已完成' }, { agent: { session: { id: 'session-kiki-seg' } } });
   assert.ok(prompts.some(p => p.sessionId === 'session-main'), '应知会主 Bot');
 });
 
@@ -790,13 +790,13 @@ test('issue_get omits reply id on status/assign entries and issue_comment reject
   const created = await post(fetch, { action: 'create', title: '状态不可回复' });
   const id = created.value.issue.id;
   await post(fetch, { action: 'assign', id, sessionId: 'session-weifeng', name: '伟峰' });
-  await post(fetch, { action: 'update', id, status: 'dispatched' });
+  await post(fetch, { action: 'update', id, status: 'dispatched', note: '开始执行' });
   await commentTool.execute({ id, body: '正文里的讨论' }, { agent: { session: { id: 'session-weifeng' } } });
 
   const detail = await post(fetch, { action: 'get', id });
   const statusEntry = detail.value.issue.comments.find(c => c.kind === 'status');
   const assignEntry = detail.value.issue.comments.find(c => c.kind === 'assign');
-  const normalEntry = detail.value.issue.comments.find(c => c.kind === 'comment');
+  const normalEntry = detail.value.issue.comments.find(c => c.kind === 'comment' && c.body === '正文里的讨论');
 
   const got = await getTool.execute({ id }, { agent: { session: { id: 'session-main' } } });
   const statusLine = got.comments.find(line => line.includes('[状态]'));

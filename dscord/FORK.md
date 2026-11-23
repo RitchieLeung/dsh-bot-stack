@@ -63,6 +63,23 @@ ACP agent 可能回报空字符串错误码，`??` 会把空串保留下来，`L
 - `WorkCore` 实时跟踪 `frontBusy`/`frontDoing` 与后台 Worker 负载（`loadView()`），暴露到 `localBot()`、`ContactBook.reachableBots()`（`event.contacts`）以及 `handoffs.js` 的 `rt.statusOf()`（`list_bots`）；
 - `tools.js` 的 `message_bot` 在目标 Bot 前台正忙时默认改为排队（`when="queue"`，`steer=false`），仅显式传 `when="now"` 时才中途插队纠偏；`prompt.js`（`MAIN_RULES`）与 `message-context.mjs` 增加负载均衡调度规则，优先分流给 `idle` 或低负载队友。
 
+### 9. DS-Bot 聊天界面展示代码修改 Diff 卡片（原生模型 Bot + 本地 CLI Bot）
+
+**文件**：
+- `vendor/ds-bot/src/host/local-agents/diff-activity.js`（新增）
+- `vendor/ds-bot/src/host/local-agents/codex.js`
+- `vendor/ds-bot/src/host/local-agents/claude.js`
+- `vendor/ds-bot/src/host/local-agents/acp.js`
+- `vendor/ds-bot/client.js`
+
+**上游**：
+- DS-Bot 通过 `ToolCell`（`priority: -100`）接管了 `conversation.chat.node` 的 `tool-call` 槽位，且 `DRAWN` 白名单仅包含社交/卡片工具，导致原生模型 Bot 的 `edit` / `write` / `apply_patch` / `str_replace_editor` / `edit_file` / `write_file` 被直接隐藏为 `CellEmpty`；
+- 本地 CLI Bot（Codex / Claude Code / ACP）的文件改动仅输出简略文本活动行（如 `▸ edit` / `▸ Edit`），丢弃了 `fileChange.changes[].diff` 与 `old_string`/`new_string`。
+
+**改成**：
+- 新增 `diff-activity.js` 并在 `codex.js`、`claude.js`、`acp.js` 中将文件修改事件序列化为单行 `▸ DIFF <json>` 活动行（带 12KB 截断保护）；
+- 在 `vendor/ds-bot/client.js` 中把 6 个文件修改工具加入 `DRAWN` 并在 `renderCall` 与 `AssistantCell` 中复用 `lineDiff` 和 `.bt-learning-file` 样式渲染可折叠的 `FileDiffCard`（展示文件名、路径、`+N`/`-M` 行数统计及红绿行级 diff，超过 8 行自动折叠并支持展开）。
+
 ## 不是改在这里的问题
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。

@@ -69,7 +69,7 @@ test('create stores type and meta reports the types in use', async () => {
 test('update applies a valid transition', async () => {
   const { handle } = handler();
   const { value: { issue } } = await handle({ action: 'create', title: 'X' });
-  const result = await handle({ action: 'update', id: issue.id, status: 'discussing' });
+  const result = await handle({ action: 'update', id: issue.id, status: 'discussing', note: '开始讨论' });
   assert.equal(result.value.issue.status, 'discussing');
 });
 
@@ -160,9 +160,9 @@ test('done is refused over the HTTP contract when a dependency is open', async (
   const a = (await handle({ action: 'create', title: 'A' })).value.issue;
   const b = (await handle({ action: 'create', title: 'B' })).value.issue;
   await handle({ action: 'link', id: a.id, dependsOn: b.id });
-  await handle({ action: 'update', id: a.id, status: 'dispatched' });
-  await handle({ action: 'update', id: a.id, status: 'in_review' });
-  const refused = await handle({ action: 'update', id: a.id, status: 'done' });
+  await handle({ action: 'update', id: a.id, status: 'dispatched', note: '开始执行' });
+  await handle({ action: 'update', id: a.id, status: 'in_review', note: '提交验收' });
+  const refused = await handle({ action: 'update', id: a.id, status: 'done', result: '验收通过' });
   assert.equal(refused.ok, false);
   assert.equal(refused.error.code, 'BLOCKED_BY_DEPS');
   assert.match(refused.error.message, /#2「B」/);
@@ -198,8 +198,8 @@ test('update forwards a rejection when打回重做', async () => {
   const { handle } = handler();
   const { value: { issue } } = await handle({ action: 'create', title: 'X' });
   await handle({ action: 'assign', id: issue.id, sessionId: 's-1', name: '伟峰' });
-  await handle({ action: 'update', id: issue.id, status: 'dispatched' });
-  await handle({ action: 'update', id: issue.id, status: 'in_review' });
+  await handle({ action: 'update', id: issue.id, status: 'dispatched', note: '开始执行' });
+  await handle({ action: 'update', id: issue.id, status: 'in_review', note: '提交验收' });
   // 打回不带意见 → 拒绝
   const noOpinion = await handle({ action: 'update', id: issue.id, status: 'dispatched' });
   assert.equal(noOpinion.error.code, 'REJECTION_REQUIRED');
@@ -214,8 +214,8 @@ test('面板打回（in_review→dispatched）会知会对侧', async () => {
   const seen = [];
   const { handle } = handler({ notify: (issue, payload) => { seen.push(payload.body); } });
   const { value: { issue } } = await handle({ action: 'create', title: 'X' });
-  await handle({ action: 'update', id: issue.id, status: 'dispatched' });
-  await handle({ action: 'update', id: issue.id, status: 'in_review' });
+  await handle({ action: 'update', id: issue.id, status: 'dispatched', note: '开始执行' });
+  await handle({ action: 'update', id: issue.id, status: 'in_review', note: '提交验收' });
   seen.length = 0;
   const rejected = await handle({ action: 'update', id: issue.id, status: 'dispatched', rejection: '事情没完成' });
   assert.equal(rejected.ok, true);
@@ -226,7 +226,7 @@ test('普通状态变更（open→discussing）不打扰对侧', async () => {
   const seen = [];
   const { handle } = handler({ notify: (issue, payload) => { seen.push(payload.body); } });
   const { value: { issue } } = await handle({ action: 'create', title: 'X' });
-  await handle({ action: 'update', id: issue.id, status: 'discussing' });
+  await handle({ action: 'update', id: issue.id, status: 'discussing', note: '开始讨论' });
   assert.equal(seen.length, 0);
 });
 
@@ -302,8 +302,22 @@ test('priority flows through meta, create, update, and list', async () => {
   assert.equal(listed.value.total, 1);
   assert.equal(listed.value.items[0].id, p0.value.issue.id);
 
-  await handle({ action: 'update', id: p2.value.issue.id, status: 'dispatched' });
+  await handle({ action: 'update', id: p2.value.issue.id, status: 'dispatched', note: '开始处理' });
   const locked = await handle({ action: 'update', id: p2.value.issue.id, priority: 'P0' });
   assert.equal(locked.ok, false);
   assert.equal(locked.error.code, 'PRIORITY_LOCKED');
+});
+
+test('update requires opinion (note) for every status transition over HTTP', async () => {
+  const { handle } = handler();
+  const { value: { issue } } = await handle({ action: 'create', title: '取消需写意见' });
+  const missing = await handle({ action: 'update', id: issue.id, status: 'cancelled' });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error.code, 'OPINION_REQUIRED');
+
+  const ok = await handle({ action: 'update', id: issue.id, status: 'cancelled', note: '用户决定取消' });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.value.issue.status, 'cancelled');
+  const got = await handle({ action: 'get', id: issue.id });
+  assert.ok(got.value.issue.comments.some(c => c.body === '用户决定取消'));
 });

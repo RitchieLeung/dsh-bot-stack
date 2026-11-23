@@ -94,6 +94,8 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
         const issue = resolve().update(body.id, {
           status: body.status,
           result: body.result,
+          note: typeof body.note === 'string' ? body.note : undefined,
+          opinion: typeof body.opinion === 'string' ? body.opinion : undefined,
           title: body.title,
           body: body.body,
           priority: body.priority,
@@ -104,9 +106,10 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
         }, author);
         // 状态推进要知会对侧：打回/验收/交结果时，通知执行人或主 Bot（面板这次之前漏了）。
         if (typeof notify === 'function' && body.status !== undefined && ['dispatched', 'in_review', 'done', 'failed'].includes(issue.status)) {
+          const opinionText = [body.note, body.opinion, body.result].find(v => typeof v === 'string' && v.trim())?.trim();
           const summary = typeof body.rejection === 'string' && body.rejection.trim()
             ? `被打回重做：${body.rejection.trim()}`
-            : `状态变更为「${STATUS_LABELS[issue.status] || issue.status}」`;
+            : `状态变更为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`;
           try { await notify(issue, { body: summary, statusChange: true }, null); } catch { /* best-effort */ }
         }
         return { ok: true, value: { issue } };

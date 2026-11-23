@@ -1151,14 +1151,30 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
      * 验收 / 打回意见的浮窗：替代 window.prompt。
      * 原生 prompt 是浏览器级弹窗，看着像系统事件、样式也不跟主题；这里做成面板内浮窗。
      */
+    const REVIEW_META = {
+      done: { title: '验收通过', placeholder: '填写验收意见…', inputTitle: '提交后写入闭环结果', emptyErr: '验收必须写意见', btn: '确认验收', btnKind: 'primary' },
+      reject: { title: '打回重做', placeholder: '填写打回原因…', inputTitle: '提交后写入时间线并通知经办人', emptyErr: '打回必须写意见', btn: '确认打回', btnKind: 'danger' },
+      cancelled: { title: '取消事务', placeholder: '填写取消原因或处理意见…', inputTitle: '提交后写入时间线并取消事务', emptyErr: '取消必须写处理意见', btn: '确认取消', btnKind: 'danger' },
+      discussing: { title: '标记讨论中', placeholder: '填写讨论焦点或处理意见…', inputTitle: '提交后写入时间线并标记为讨论中', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
+      open: { title: '转回待处理', placeholder: '填写重开或退回待处理的原因…', inputTitle: '提交后写入时间线并转回待处理', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
+      dispatched: { title: '转入进行中', placeholder: '填写处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
+      in_review: { title: '提交待验收', placeholder: '填写交付结论或处理意见…', inputTitle: '提交后写入时间线并转待验收', emptyErr: '必须填写处理意见', btn: '确认提交', btnKind: 'primary' },
+      failed: { title: '标记失败', placeholder: '填写失败原因或处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认标记', btnKind: 'danger' },
+    };
+
     function ReviewDialog({ kind, onSubmit, onCancel }) {
       const [value, setValue] = React.useState('');
       const [error, setError] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
-      const done = kind === 'done';
-      const title = done ? '验收通过' : '打回重做';
-      const placeholder = done ? '填写验收意见…' : '填写打回原因…';
-      const inputTitle = done ? '提交后写入闭环结果' : '提交后写入时间线并通知经办人';
+      const meta = REVIEW_META[kind] || {
+        title: `流转至「${STATUS_LABEL[kind] || kind}」`,
+        placeholder: '填写处理意见…',
+        inputTitle: '提交后写入时间线',
+        emptyErr: '必须填写处理意见',
+        btn: '确认提交',
+        btnKind: 'primary',
+      };
+      const { title, placeholder, inputTitle, emptyErr, btn, btnKind } = meta;
 
       React.useEffect(() => {
         const onKey = (event) => { if (event.key === 'Escape') onCancel?.(); };
@@ -1168,7 +1184,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 
       const submit = async () => {
         const text = value.trim();
-        if (!text) { setError(done ? '验收必须写意见' : '打回必须写意见'); return; }
+        if (!text) { setError(emptyErr); return; }
         setError(null);
         setBusy(true);
         try { await onSubmit?.(text); }
@@ -1193,9 +1209,9 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
           h('div', { className: 'is-modal-actions' },
             h('button', { type: 'button', className: 'is-btn', onClick: () => onCancel?.() }, '取消'),
             h('button', {
-              type: 'button', className: 'is-btn', 'data-kind': done ? 'primary' : 'danger',
+              type: 'button', className: 'is-btn', 'data-kind': btnKind,
               disabled: busy, onClick: submit,
-            }, busy ? '提交中…' : (done ? '确认验收' : '确认打回')),
+            }, busy ? '提交中…' : btn),
           ),
         ));
     }
@@ -1521,31 +1537,28 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       React.useEffect(() => { refresh(); }, [refresh, refreshKey]);
 
       const act = async (status) => {
-        // 验收 / 打回要写意见：开浮窗，不再用浏览器原生 prompt。
-        if (status === 'done' || status === 'reject') { setReview(status); return; }
+        // 所有状态流转（除 start 派工外）均需填写处理意见：统一开浮窗。
+        if (status !== 'start') { setReview(status); return; }
         setBusy(true); setNote(null); setError(null);
         try {
-          if (status === 'start') {
-            const value = await call('start', { id });
-            if (value?.dispatched) { setStarted(true); setNote(value.note || '已交给主 Bot'); }
-            else setNote(`未派工：${value?.reason || '未知原因'}`);
-          } else {
-            await call('update', { id, status, authorKind: 'user' });
-            setNote(`已更新为「${STATUS_LABEL[status]}」`);
-            onChanged?.();
-          }
+          const value = await call('start', { id });
+          if (value?.dispatched) { setStarted(true); setNote(value.note || '已交给主 Bot'); }
+          else setNote(`未派工：${value?.reason || '未知原因'}`);
           await refresh();
         } catch (caught) { setError(caught); } finally { setBusy(false); }
       };
 
-      // 浮窗点确认：带意见提交验收/打回。失败抛给浮窗显示，不落面板级 error。
+      // 浮窗点确认：带意见提交状态流转。失败抛给浮窗显示，不落面板级 error。
       const submitReview = async (kind, opinion) => {
         if (kind === 'done') {
-          await call('update', { id, status: 'done', result: opinion, authorKind: 'user' });
+          await call('update', { id, status: 'done', result: opinion, note: opinion, authorKind: 'user' });
           setNote('已验收通过，意见已写入闭环结果');
-        } else {
-          await call('update', { id, status: 'dispatched', rejection: opinion, authorKind: 'user' });
+        } else if (kind === 'reject') {
+          await call('update', { id, status: 'dispatched', rejection: opinion, note: opinion, authorKind: 'user' });
           setNote('已打回重做，意见已写入时间线并知会经办人');
+        } else {
+          await call('update', { id, status: kind, note: opinion, authorKind: 'user' });
+          setNote(`已更新为「${STATUS_LABEL[kind] || kind}」，处理意见已写入时间线`);
         }
         setReview(null);
         onChanged?.();

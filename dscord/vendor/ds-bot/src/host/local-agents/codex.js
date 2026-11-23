@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process'
 import { JsonRpcPeer, wireProcess, EventQueue } from './jsonrpc.js'
 import { cleanEnv } from './discover.js'
+import { formatDiffActivity } from './diff-activity.js'
 
 export class CodexEngine {
   constructor(route, engine, { findExecutable }) {
@@ -72,6 +73,21 @@ export class CodexEngine {
         if (thread === undefined) break
         if (item.type === 'agentMessage' || item.type === 'agent_message') thread.push({ type: 'text', text: item.text ?? '' })
         else if (item.type === 'reasoning') thread.push({ type: 'thought', text: (item.content ?? []).join('') || item.text || '' })
+        else if (method === 'item/completed' && (item.type === 'fileChange' || item.type === 'file_change') && Array.isArray(item.changes)) {
+          for (const change of item.changes) {
+            thread.push({
+              type: 'activity',
+              text: formatDiffActivity({
+                tool: 'edit',
+                path: change?.path ?? '',
+                kind: change?.kind ?? 'update',
+                diff: change?.diff ?? change?.patch,
+                oldText: change?.oldText ?? change?.old_string,
+                newText: change?.newText ?? change?.new_string,
+              }),
+            })
+          }
+        }
         else if (method === 'item/started' && item.type !== undefined) thread.push({ type: 'activity', text: `▸ ${activityOf(item)}` })
         break
       }

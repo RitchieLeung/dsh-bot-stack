@@ -3,6 +3,7 @@
 // events until a `result` ends the turn.
 import { spawn } from 'node:child_process'
 import { cleanEnv } from './discover.js'
+import { claudeDiffActivities, formatDiffActivity } from './diff-activity.js'
 
 export class ClaudeEngine {
   constructor(route, engine, { findExecutable }) {
@@ -120,7 +121,14 @@ class ClaudeSession {
         for (const block of event.message?.content ?? []) {
           if (block.type === 'text') this.emit({ type: 'text', text: block.text ?? '' })
           else if (block.type === 'thinking') this.emit({ type: 'thought', text: block.thinking ?? '' })
-          else if (block.type === 'tool_use') this.emit({ type: 'activity', text: `▸ ${block.name ?? 'tool'}` })
+          else if (block.type === 'tool_use') {
+            const diffs = claudeDiffActivities(block)
+            if (diffs.length > 0) {
+              for (const line of diffs) this.emit({ type: 'activity', text: line })
+            } else {
+              this.emit({ type: 'activity', text: `▸ ${block.name ?? 'tool'}` })
+            }
+          }
         }
         break
       }

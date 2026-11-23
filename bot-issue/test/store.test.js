@@ -24,7 +24,7 @@ test('list filters by status', () => {
   const store = fresh();
   const a = store.create({ title: 'A' });
   const b = store.create({ title: 'B' });
-  store.update(b.id, { status: 'discussing' });
+  store.update(b.id, { status: 'discussing', note: '先讨论' });
   const open = store.list({ status: 'open' });
   assert.equal(open.total, 1);
   assert.equal(open.items[0].id, a.id);
@@ -46,22 +46,24 @@ test('state machine rejects illegal transitions', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
   assert.throws(() => store.update(issue.id, { status: 'done', result: '验收通过' }), /不能从「待处理」直接到「已闭环」/);
-  const moved = store.update(issue.id, { status: 'discussing' });
+  const moved = store.update(issue.id, { status: 'discussing', note: '先对齐方案' });
   assert.equal(moved.status, 'discussing');
-  // a status change is recorded in the timeline
+  // a status change and its opinion are recorded in the timeline
   const full = store.get(issue.id);
-  assert.equal(full.comments.length, 1);
+  assert.equal(full.comments.length, 2);
   assert.equal(full.comments[0].kind, 'status');
   // 时间线是写给人看的：状态用中文名，不暴露 open/dispatched 这类变量名
   assert.equal(full.comments[0].body, '状态：待处理 → 讨论中');
+  assert.equal(full.comments[1].kind, 'comment');
+  assert.equal(full.comments[1].body, '先对齐方案');
   store.close();
 });
 
 test('dispatched can be pulled back to open (打回)', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.update(issue.id, { status: 'dispatched' });
-  const back = store.update(issue.id, { status: 'open' });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' });
+  const back = store.update(issue.id, { status: 'open', note: '退回待处理' });
   assert.equal(back.status, 'open');
   store.close();
 });
@@ -99,7 +101,7 @@ test('old raw-status comments are rewritten to Chinese labels when the board ope
 test('version guard refuses stale writes', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  assert.throws(() => store.update(issue.id, { status: 'discussing', expectedVersion: 99 }), err => err.code === 'VERSION_CONFLICT');
+  assert.throws(() => store.update(issue.id, { status: 'discussing', note: '先讨论', expectedVersion: 99 }), err => err.code === 'VERSION_CONFLICT');
   store.close();
 });
 
@@ -147,7 +149,7 @@ test('syncTask failed sends issue to failed', () => {
 test('syncTask leaves a human-closed issue alone', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.update(issue.id, { status: 'cancelled' });
+  store.update(issue.id, { status: 'cancelled', note: '人工取消' });
   const full = store.syncTask(issue.id, { taskId: 'T-abc', status: 'done', resultText: '迟到的结果' });
   assert.equal(full.status, 'cancelled'); // 不覆盖人工关闭
   assert.ok(full.comments.some(c => c.kind === 'result' && /迟到的结果/.test(c.body)));
@@ -179,7 +181,7 @@ test('counts returns per-status totals', () => {
   store.create({ title: 'A' });
   store.create({ title: 'B' });
   const c = store.create({ title: 'C' });
-  store.update(c.id, { status: 'discussing' });
+  store.update(c.id, { status: 'discussing', note: '先讨论' });
   const counts = store.counts();
   assert.equal(counts.open, 2);
   assert.equal(counts.discussing, 1);
@@ -244,7 +246,7 @@ test('a #N reference resolves to the issue for get/update/comment', () => {
   store.create({ title: 'B' });
   assert.equal(store.get(`#${a.number}`).id, a.id);
   assert.equal(store.get(String(a.number)).id, a.id);
-  assert.equal(store.update(`#${a.number}`, { status: 'discussing' }).status, 'discussing');
+  assert.equal(store.update(`#${a.number}`, { status: 'discussing', note: '讨论' }).status, 'discussing');
   assert.equal(store.comment(`#${a.number}`, { body: 'hi', authorKind: 'user' }).issueId, a.id);
   assert.throws(() => store.get('#999'), err => err.code === 'NOT_FOUND');
   store.close();
@@ -359,16 +361,16 @@ test('deps: done is blocked while a dependency is unfinished', () => {
   const a = store.create({ title: 'A' });
   const b = store.create({ title: 'B' });
   store.link(a.id, b.id);
-  store.update(a.id, { status: 'dispatched' });
-  store.update(a.id, { status: 'in_review' });
+  store.update(a.id, { status: 'dispatched', note: '开始执行' });
+  store.update(a.id, { status: 'in_review', note: '提交验收' });
   assert.throws(() => store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }), err => {
     assert.equal(err.code, 'BLOCKED_BY_DEPS');
     assert.match(err.message, /#2「B」/);
     return true;
   });
   // B closes its loop, then A can complete.
-  store.update(b.id, { status: 'dispatched' });
-  store.update(b.id, { status: 'in_review' });
+  store.update(b.id, { status: 'dispatched', note: '开始执行' });
+  store.update(b.id, { status: 'in_review', note: '提交验收' });
   store.update(b.id, { status: 'done', result: '验收通过' }, { kind: 'user' });
   assert.equal(store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }).status, 'done');
   store.close();
@@ -379,9 +381,9 @@ test('deps: a cancelled dependency still blocks completion (not a back door)', (
   const a = store.create({ title: 'A' });
   const b = store.create({ title: 'B' });
   store.link(a.id, b.id);
-  store.update(b.id, { status: 'cancelled' });
-  store.update(a.id, { status: 'dispatched' });
-  store.update(a.id, { status: 'in_review' });
+  store.update(b.id, { status: 'cancelled', note: '取消前置' });
+  store.update(a.id, { status: 'dispatched', note: '开始执行' });
+  store.update(a.id, { status: 'in_review', note: '提交验收' });
   assert.throws(() => store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_DEPS');
   store.close();
 });
@@ -394,8 +396,8 @@ test('deps: unlink frees the issue and list carries depsOpen', () => {
   assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 1);
   store.unlink(a.id, b.id);
   assert.equal(store.list().items.find(i => i.id === a.id).depsOpen, 0);
-  store.update(a.id, { status: 'dispatched' });
-  store.update(a.id, { status: 'in_review' });
+  store.update(a.id, { status: 'dispatched', note: '开始执行' });
+  store.update(a.id, { status: 'in_review', note: '提交验收' });
   assert.equal(store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' }).status, 'done');
   store.close();
 });
@@ -404,12 +406,12 @@ test('deps: a closed issue cannot gain an unfinished prerequisite', () => {
   const store = fresh();
   const a = store.create({ title: 'A' });
   const b = store.create({ title: 'B' });
-  store.update(a.id, { status: 'dispatched' });
-  store.update(a.id, { status: 'in_review' });
+  store.update(a.id, { status: 'dispatched', note: '开始执行' });
+  store.update(a.id, { status: 'in_review', note: '提交验收' });
   store.update(a.id, { status: 'done', result: '验收通过' }, { kind: 'user' });
   assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
   // a finished prerequisite is fine
-  store.update(b.id, { status: 'cancelled' });
+  store.update(b.id, { status: 'cancelled', note: '取消' });
   assert.throws(() => store.link(a.id, b.id), err => err.code === 'ISSUE_CLOSED');
   store.close();
 });
@@ -481,13 +483,13 @@ test('loads 只统计进行中/待验收的指派事务', () => {
   const c = store.create({ title: 'C' });
   const d = store.create({ title: 'D' });
   store.assign(a.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
-  store.update(a.id, { status: 'dispatched' }, { kind: 'user' });
+  store.update(a.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
   store.assign(b.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
-  store.update(b.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(b.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(b.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(b.id, { status: 'in_review', note: '提交验收' }, { kind: 'user' });
   store.assign(c.id, { sessionId: 's-2', name: '玉清' }, { kind: 'user' });
-  store.update(c.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(c.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(c.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(c.id, { status: 'in_review', note: '提交验收' }, { kind: 'user' });
   store.update(c.id, { status: 'done', result: '验收通过' }, { kind: 'user' }); // 已闭环不算
   // d 无 assignee，不算
   assert.deepEqual(store.loads(), { 's-1': 2 });
@@ -512,8 +514,8 @@ function toInReview() {
   const store = fresh();
   const issue = store.create({ title: 'X' });
   store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
-  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review', note: '提交验收' }, { kind: 'agent', name: '伟峰', isMain: false });
   return { store, id: issue.id };
 }
 
@@ -547,8 +549,8 @@ test('worker 可把自己那单 进行中→待验收（交结果）', () => {
   // toInReview 里已经由 worker（isMain:false）推进到 in_review，这里再开一单验证 dispatched→in_review
   const issue = store.create({ title: 'Y' });
   store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
-  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
-  const reported = store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  const reported = store.update(issue.id, { status: 'in_review', note: '已完成交付' }, { kind: 'agent', name: '伟峰', isMain: false });
   assert.equal(reported.status, 'in_review');
   store.close();
 });
@@ -567,14 +569,14 @@ test('验收通过（done）必须写验收意见 result', () => {
 test('父事务有未闭环子事务时不能验收通过（BLOCKED_BY_CHILDREN）', () => {
   const store = fresh();
   const parent = store.create({ title: '父' });
-  store.update(parent.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(parent.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(parent.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(parent.id, { status: 'in_review', note: '提交验收' }, { kind: 'user' });
   const child = store.create({ title: '子', parentId: parent.id });
   // 子事务还 open，父不能 done
   assert.throws(() => store.update(parent.id, { status: 'done', result: '验收' }, { kind: 'user' }), err => err.code === 'BLOCKED_BY_CHILDREN');
   // 子事务闭环后，父可验收
-  store.update(child.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(child.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(child.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(child.id, { status: 'in_review', note: '提交验收' }, { kind: 'user' });
   store.update(child.id, { status: 'done', result: '子完成' }, { kind: 'user' });
   const done = store.update(parent.id, { status: 'done', result: '父完成' }, { kind: 'user' });
   assert.equal(done.status, 'done');
@@ -584,11 +586,11 @@ test('父事务有未闭环子事务时不能验收通过（BLOCKED_BY_CHILDREN�
 test('重开（done→open）后清掉旧的 result', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(issue.id, { status: 'in_review' }, { kind: 'user' });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review', note: '提交验收' }, { kind: 'user' });
   store.update(issue.id, { status: 'done', result: '已验收' }, { kind: 'user' });
   assert.equal(store.get(issue.id).result, '已验收');
-  store.update(issue.id, { status: 'open' }, { kind: 'user' });
+  store.update(issue.id, { status: 'open', note: '重新打开' }, { kind: 'user' });
   assert.equal(store.get(issue.id).result, null);
   store.close();
 });
@@ -674,8 +676,8 @@ test('comment refuses replying to status or assign entries, while allowing resul
   const store = fresh();
   const issue = store.create({ title: '不可回复系统变更' });
   store.assign(issue.id, { sessionId: 's-1', name: '伟峰' }, { kind: 'user' });
-  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review', note: '提交验收' }, { kind: 'agent', name: '伟峰', isMain: false });
   store.comment(issue.id, { body: '任务完成总结', authorKind: 'agent', authorName: '伟峰', kind: 'result' });
   store.update(issue.id, { status: 'dispatched', rejection: '请再补一组用例' }, { kind: 'user' });
 
@@ -737,8 +739,8 @@ test('legacy comments table without replyToId and authorSessionId migrates clean
 test('versions returns title and status and userReplies lists only non-user replies to user comments', () => {
   const store = fresh();
   const issue = store.create({ title: '浏览器提醒测试' });
-  store.update(issue.id, { status: 'dispatched' }, { kind: 'user' });
-  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review', note: '提交验收' }, { kind: 'agent', name: '伟峰', isMain: false });
 
   const versions = store.versions();
   assert.equal(versions.length, 1);
@@ -799,10 +801,10 @@ test('priority defaults to P2, normalizes case, validates, and updates', () => {
 test('priority can only be adjusted in open or discussing, locked once dispatched', () => {
   const store = fresh();
   const issue = store.create({ title: '优先级锁定测试', priority: 'P2' });
-  store.update(issue.id, { status: 'discussing' });
+  store.update(issue.id, { status: 'discussing', note: '进入讨论' });
   assert.equal(store.update(issue.id, { priority: 'P1' }).priority, 'P1');
 
-  store.update(issue.id, { status: 'dispatched' });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' });
   assert.throws(
     () => store.update(issue.id, { priority: 'P0' }),
     err => err.code === 'PRIORITY_LOCKED',
@@ -810,14 +812,14 @@ test('priority can only be adjusted in open or discussing, locked once dispatche
   // 未实际改值时不报错
   assert.equal(store.update(issue.id, { priority: 'P1', title: '改个标题' }).priority, 'P1');
 
-  store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '伟峰', isMain: false });
+  store.update(issue.id, { status: 'in_review', note: '提交验收' }, { kind: 'agent', name: '伟峰', isMain: false });
   assert.throws(() => store.update(issue.id, { priority: 'P0' }), err => err.code === 'PRIORITY_LOCKED');
 
   store.update(issue.id, { status: 'done', result: '验收完成' }, { kind: 'user' });
   assert.throws(() => store.update(issue.id, { priority: 'P3' }), err => err.code === 'PRIORITY_LOCKED');
 
   // 重开回待处理后，恢复可调
-  store.update(issue.id, { status: 'open' }, { kind: 'user' });
+  store.update(issue.id, { status: 'open', note: '重开调整' }, { kind: 'user' });
   assert.equal(store.update(issue.id, { priority: 'P0' }).priority, 'P0');
   store.close();
 });
@@ -859,5 +861,54 @@ test('legacy issues table without priority column migrates to P2', () => {
   const got = store.get('I-oldp');
   assert.equal(got.priority, 'P2');
   assert.equal(store.list({ priority: 'P2' }).total, 1);
+  store.close();
+});
+
+test('all status transitions require a non-empty processing opinion and record it in timeline', () => {
+  const store = fresh();
+  const issue = store.create({ title: '全状态流转意见必填' });
+
+  // open -> discussing without opinion fails
+  assert.throws(
+    () => store.update(issue.id, { status: 'discussing' }),
+    err => err.code === 'OPINION_REQUIRED',
+  );
+  // open -> cancelled without opinion fails
+  assert.throws(
+    () => store.update(issue.id, { status: 'cancelled' }),
+    err => err.code === 'OPINION_REQUIRED',
+  );
+  // open -> discussing with note succeeds and writes comment
+  store.update(issue.id, { status: 'discussing', note: '先拉相关同事对齐口径' }, { kind: 'user', name: '用户' });
+  let full = store.get(issue.id);
+  assert.equal(full.status, 'discussing');
+  assert.ok(full.comments.some(c => c.kind === 'comment' && c.body === '先拉相关同事对齐口径'));
+
+  // discussing -> dispatched with note succeeds
+  store.update(issue.id, { status: 'dispatched', note: '方案已定，指派开始开发' }, { kind: 'agent', name: '小欣', isMain: true });
+  // dispatched -> in_review without opinion fails
+  assert.throws(
+    () => store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '怡丹' }),
+    err => err.code === 'OPINION_REQUIRED',
+  );
+  // dispatched -> in_review with note records kind='result' comment
+  store.update(issue.id, { status: 'in_review', note: '已完成代码修改与单测验证' }, { kind: 'agent', name: '怡丹' });
+  full = store.get(issue.id);
+  assert.equal(full.status, 'in_review');
+  assert.ok(full.comments.some(c => c.kind === 'result' && c.body === '已完成代码修改与单测验证'));
+
+  // in_review -> cancelled with note succeeds and writes comment
+  store.update(issue.id, { status: 'cancelled', note: '需求已合并到新单，本单取消' }, { kind: 'user', name: '用户' });
+  full = store.get(issue.id);
+  assert.equal(full.status, 'cancelled');
+  assert.ok(full.comments.some(c => c.body === '需求已合并到新单，本单取消'));
+
+  // cancelled -> open without opinion fails, with note succeeds
+  assert.throws(
+    () => store.update(issue.id, { status: 'open' }, { kind: 'user' }),
+    err => err.code === 'OPINION_REQUIRED',
+  );
+  store.update(issue.id, { status: 'open', note: '重新恢复此单跟进' }, { kind: 'user', name: '用户' });
+  assert.equal(store.get(issue.id).status, 'open');
   store.close();
 });

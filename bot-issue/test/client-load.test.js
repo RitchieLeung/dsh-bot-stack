@@ -214,3 +214,8 @@ test('client.js 详情页采用分块卡片布局与双栏依赖展示', () => {
   assert.match(SOURCE, /\.is-tl::before\{[^}]*left:6px;[^}]*width:2px/, '时间线竖线中心应落在 7px');
   assert.match(SOURCE, /\.is-tl-item::before\{[^}]*left:-24px;[^}]*width:12px;[^}]*box-sizing:border-box/, '圆点中心与竖线同在 7px');
 });
+
+test('client.js 所有状态流转按钮（除 start 外）均弹出处理意见浮窗并携带 note 提交', () => {
+  assert.match(SOURCE, /if\s*\(status\s*!==\s*'start'\)\s*\{\s*setReview\(status\);\s*return;\s*\}/, '除 start 外的所有状态流转均应打开意见浮窗');
+  assert.match(SOURCE, /call\('update',\s*\{\s*id,\s*status:\s*kind,\s*note:\s*opinion/, '通用状态流转提交应携带 note: opinion');
+});

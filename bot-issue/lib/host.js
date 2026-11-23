@@ -811,13 +811,14 @@ export function apply(ctx, config = {}) {
 
     toolsCtx.effect(() => register({
       name: 'issue_update',
-      description: `更新事务：改状态、紧急程度、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}）；只有用户能推进到 done（已闭环），主 Bot 到 in_review（待验收）即视为交验；传 expectedVersion 可避免覆盖别人的改动。`,
+      description: `更新事务：改状态、紧急程度、写结果、改标题或正文。改状态要遵守流转规则（${statusGloss}），且所有状态流转都必须填写处理意见（note / result / rejection）；只有用户能推进到 done（已闭环），主 Bot 到 in_review（待验收）即视为交验；传 expectedVersion 可避免覆盖别人的改动。`,
       parameters: {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
           status: { type: 'string', enum: statusEnum, description: `目标状态（${statusGloss}）。in_review=待验收（执行人交验、主 Bot 测试通过的终点）；done=已闭环（仅用户可点，主 Bot 点会被拒绝）` },
           priority: { type: 'string', enum: priorityEnum, description: '需求紧急程度：P0（紧急）、P1（高）、P2（中）、P3（低）' },
+          note: { type: 'string', description: '状态流转处理意见（任何改状态的动作必填：取消写取消原因、提交待验收写交付结论、转进行中/讨论中/重开/失败写处理说明；验收通过也可填 result，打回重做也可填 rejection）' },
           result: { type: 'string', description: '闭环结果/验收意见（用户把 in_review 推进到 done 时必填，写清验证了什么，不要只写状态）' },
           rejection: { type: 'string', description: '打回意见（把 in_review 打回 dispatched 时必填）' },
           title: { type: 'string' },
@@ -848,15 +849,18 @@ export function apply(ctx, config = {}) {
           ? [args.body !== undefined ? args.body : before.body, markdown].filter(Boolean).join('\n\n')
           : args.body;
         const issue = store().update(args.id, {
-          status: args.status, priority: args.priority, result: args.result, title: args.title, body,
+          status: args.status, priority: args.priority, result: args.result,
+          note: typeof args.note === 'string' ? args.note : undefined,
+          title: args.title, body,
           tags: args.tags, type: args.type,
           rejection: typeof args.rejection === 'string' ? args.rejection : undefined,
           expectedVersion: typeof args.expectedVersion === 'number' ? args.expectedVersion : undefined,
         }, actor);
         if (args.status !== undefined) {
+          const opinionText = [args.note, args.result].find(v => typeof v === 'string' && v.trim())?.trim();
           const summary = typeof args.rejection === 'string' && args.rejection.trim()
             ? `被打回重做：${args.rejection.trim()}`
-            : `状态变为「${STATUS_LABELS[issue.status] || issue.status}」`;
+            : `状态变为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`;
           try { await notifyCounterpart(issue, actor.id, summary); } catch { /* best effort */ }
         }
         return { id: issue.id, status: issue.status, priority: issue.priority, version: issue.version };

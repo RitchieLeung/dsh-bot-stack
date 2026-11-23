@@ -512,9 +512,13 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     if (next !== from && from === 'in_review' && next === 'dispatched' && !(actor.kind === 'user' || actor.isMain === true)) {
       throw failure('FORBIDDEN_TRANSITION', `只有主 Bot 或用户能「${statusLabel(next)}」（当前是「${statusLabel(from)}」）`);
     }
+    const rawOpinion = [patch.note, patch.opinion, patch.rejection, patch.result]
+      .find(val => typeof val === 'string' && val.trim());
+    const opinion = rawOpinion ? rawOpinion.trim() : '';
     // 打回必须带打回意见，意见会写进时间线（kind='reject'），让经办人知道哪里要重做。
     if (next !== from && from === 'in_review' && next === 'dispatched') {
-      if (typeof patch.rejection !== 'string' || !patch.rejection.trim()) {
+      const rejectionText = typeof patch.rejection === 'string' && patch.rejection.trim() ? patch.rejection.trim() : opinion;
+      if (!rejectionText) {
         throw failure('REJECTION_REQUIRED', '打回必须写打回意见');
       }
     }
@@ -530,8 +534,15 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
         throw failure('BLOCKED_BY_CHILDREN', `还有 ${openChildren.length} 个子事务没闭环，不能验收通过：${openChildren.map(issueRef).join('、')}`);
       }
       // 验收通过必须写验收意见（result）：只看状态位不算验收。
-      if (typeof patch.result !== 'string' || !patch.result.trim()) {
+      const resultText = typeof patch.result === 'string' && patch.result.trim() ? patch.result.trim() : opinion;
+      if (!resultText) {
         throw failure('RESULT_REQUIRED', '验收通过必须写验收意见（result）');
+      }
+    }
+    // 其余所有状态流转（取消、交验、重开、转讨论、转进行中、标记失败等）也必须填写处理意见（内部 system 派工桥接除外）。
+    if (next !== from && next !== 'done' && !(from === 'in_review' && next === 'dispatched') && actor.kind !== 'system') {
+      if (!opinion) {
+        throw failure('OPINION_REQUIRED', `状态流转（${statusLabel(from)} → ${statusLabel(next)}）必须填写处理意见`);
       }
     }
     const title = patch.title !== undefined ? assertTitle(patch.title) : row.title;
@@ -547,7 +558,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const reopening = next !== from && TERMINAL_STATUSES.includes(from) && !TERMINAL_STATUSES.includes(next);
     const result = patch.result !== undefined
       ? (patch.result === null ? null : String(patch.result))
-      : (reopening ? null : row.result);
+      : (next !== from && next === 'done' && opinion ? opinion : (reopening ? null : row.result));
     // `tags` (array, replaces everything) wins; `type` is the single-label alias.
     const nextTags = patch.tags !== undefined
       ? normalizeTags(patch.tags)
@@ -563,7 +574,12 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     if (next !== from) {
       insertComment.run(id, actor.kind || 'system', actor.name || '', null, `状态：${statusLabel(from)} → ${statusLabel(next)}`, 'status', null, now());
       if (from === 'in_review' && next === 'dispatched') {
-        insertComment.run(id, actor.kind || 'system', actor.name || '', null, patch.rejection.trim(), 'reject', null, now());
+        const rejectionText = typeof patch.rejection === 'string' && patch.rejection.trim() ? patch.rejection.trim() : opinion;
+        insertComment.run(id, actor.kind || 'system', actor.name || '', null, rejectionText, 'reject', null, now());
+      } else if (next !== 'done' && opinion) {
+        const commentKind = next === 'in_review' ? 'result' : 'comment';
+        const cleanSid = typeof actor.id === 'string' && actor.id.trim() ? actor.id.trim() : null;
+        insertComment.run(id, actor.kind || 'user', actor.name || '', cleanSid, opinion, commentKind, null, now());
       }
     }
     return updated;

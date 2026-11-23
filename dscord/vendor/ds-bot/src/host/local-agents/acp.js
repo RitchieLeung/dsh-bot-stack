@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process'
 import { JsonRpcPeer, wireProcess, EventQueue } from './jsonrpc.js'
 import { cleanEnv } from './discover.js'
+import { acpDiffActivities, formatDiffActivity } from './diff-activity.js'
 
 const CLIENT = { name: 'ds-bot', version: '1' }
 
@@ -86,9 +87,17 @@ export class AcpEngine {
         const id = update.toolCallId
         const known = id === undefined ? undefined : session.toolCalls.get(id)
         const call = mergeCall(known, update)
-        if (id !== undefined) session.toolCalls.set(id, call)
-        if (known === undefined) session.push({ type: 'activity', text: `▸ ${describeCall(call)}` })
-        else if (update.status === 'failed' && known.status !== 'failed') session.push({ type: 'activity', text: `▸ ${describeCall(call)} — failed` })
+        if (known?._diffEmitted) call._diffEmitted = true
+        const diffs = call._diffEmitted ? [] : acpDiffActivities(call)
+        if (diffs.length > 0) {
+          call._diffEmitted = true
+          if (id !== undefined) session.toolCalls.set(id, call)
+          for (const line of diffs) session.push({ type: 'activity', text: line })
+        } else {
+          if (id !== undefined) session.toolCalls.set(id, call)
+          if (known === undefined) session.push({ type: 'activity', text: `▸ ${describeCall(call)}` })
+          else if (update.status === 'failed' && known.status !== 'failed') session.push({ type: 'activity', text: `▸ ${describeCall(call)} — failed` })
+        }
         break
       }
       case 'plan': session.push({ type: 'thought', text: planText(update.entries) }); break
