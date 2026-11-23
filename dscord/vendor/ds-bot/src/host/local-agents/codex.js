@@ -100,8 +100,8 @@ export class CodexEngine {
       }
       case 'thread/tokenUsage/updated': {
         if (thread === undefined) break
-        const usage = params?.tokenUsage ?? params?.usage
-        if (usage !== undefined) thread.push({ type: 'usage', usage: { inputTokens: usage.inputTokens ?? usage.input_tokens ?? 0, outputTokens: usage.outputTokens ?? usage.output_tokens ?? 0 } })
+        const usage = normalizeCodexTokenUsage(params?.tokenUsage ?? params?.usage)
+        if (usage !== undefined) thread.push({ type: 'usage', usage })
         break
       }
       default: break
@@ -184,7 +184,14 @@ export class CodexEngine {
   async listModels() {
     const peer = await this.ensure()
     const reply = await peer.request('model/list', {}, { timeout: 30_000 })
-    return (reply?.data ?? reply?.models ?? []).map(entry => ({ id: String(entry.id ?? entry.model), name: String(entry.displayName ?? entry.name ?? entry.id ?? entry.model) }))
+    return (reply?.data ?? reply?.models ?? []).map(entry => {
+      const cw = entry.contextWindow ?? entry.context_window ?? entry.modelContextWindow ?? entry.maxContextTokens
+      return {
+        id: String(entry.id ?? entry.model),
+        name: String(entry.displayName ?? entry.name ?? entry.id ?? entry.model),
+        ...(Number.isInteger(cw) && cw > 0 ? { contextWindow: cw } : {}),
+      }
+    })
   }
 
   async close() {
@@ -195,6 +202,29 @@ export class CodexEngine {
       child.kill('SIGTERM')
       setTimeout(() => { try { child.kill('SIGKILL') } catch {} }, 5_000).unref?.()
     }
+  }
+}
+
+export function normalizeCodexTokenUsage(raw) {
+  if (!raw || typeof raw !== 'object') return undefined
+  // Codex app-server reports `{ last: { inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens }, total: {...}, modelContextWindow }`.
+  // Prefer `last` so DSH's context meter reflects the actual current context window occupancy rather than 0.
+  const src = (raw.last && typeof raw.last === 'object') ? raw.last
+    : (raw.total && typeof raw.total === 'object') ? raw.total
+      : raw
+  const rawIn = Number(src.inputTokens ?? src.input_tokens ?? 0) || 0
+  const cached = Number(src.cachedInputTokens ?? src.cached_input_tokens ?? src.cacheReadInputTokens ?? 0) || 0
+  const out = Number(src.outputTokens ?? src.output_tokens ?? 0) || 0
+  const reasoning = Number(src.reasoningOutputTokens ?? src.reasoning_output_tokens ?? src.reasoningTokens ?? 0) || 0
+  // DSH computes total prompt occupancy as `inputTokens + cacheReadInputTokens`;
+  // OpenAI/Codex `inputTokens` already includes `cachedInputTokens`, so split cleanly.
+  const uncachedIn = cached > 0 && rawIn >= cached ? rawIn - cached : rawIn
+  if (uncachedIn === 0 && cached === 0 && out === 0 && reasoning === 0) return undefined
+  return {
+    inputTokens: uncachedIn,
+    outputTokens: out,
+    ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
+    ...(reasoning > 0 ? { reasoningTokens: reasoning } : {}),
   }
 }
 

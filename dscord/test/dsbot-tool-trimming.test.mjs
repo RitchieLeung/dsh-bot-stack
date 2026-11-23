@@ -188,3 +188,28 @@ test('WorkCore.guard enforces configurable frontMaxToolCalls from state.prefs an
   for (let i = 0; i < 10; i++) assert.equal(core.guard(execOf('bash')), undefined);
   core.dispose();
 });
+
+test('normalizeCodexTokenUsage extracts nested last/total usage and splits cached tokens cleanly', async () => {
+  const { normalizeCodexTokenUsage } = await import('../vendor/ds-bot/src/host/local-agents/codex.js');
+  // Standard Codex app-server nested payload
+  const nested = normalizeCodexTokenUsage({
+    last: { inputTokens: 102000, cachedInputTokens: 90000, outputTokens: 1200, reasoningOutputTokens: 400, totalTokens: 103200 },
+    total: { inputTokens: 500000, cachedInputTokens: 450000, outputTokens: 8000 },
+    modelContextWindow: 272000,
+  });
+  assert.deepEqual(nested, {
+    inputTokens: 12000,
+    outputTokens: 1200,
+    cacheReadInputTokens: 90000,
+    reasoningTokens: 400,
+  });
+  // Total prompt tokens reconstructed by DSH = inputTokens + cacheReadInputTokens = 102000
+  assert.equal(nested.inputTokens + nested.cacheReadInputTokens, 102000);
+
+  // Flat legacy payload still works
+  const flat = normalizeCodexTokenUsage({ input_tokens: 4000, output_tokens: 500 });
+  assert.deepEqual(flat, { inputTokens: 4000, outputTokens: 500 });
+
+  // Empty zero payload returns undefined rather than polluting session with 0/0
+  assert.equal(normalizeCodexTokenUsage({ last: { inputTokens: 0, outputTokens: 0 } }), undefined);
+});

@@ -114,7 +114,7 @@ export class LocalAgentAdapter extends LlmAdapter {
       id: model,
       name: listed?.name ?? model,
       inputModalities: ['text', 'image'],
-      context: { contextWindow: spec?.contextWindow ?? DEFAULT_CONTEXT_WINDOW },
+      context: { contextWindow: listed?.contextWindow ?? spec?.contextWindow ?? DEFAULT_CONTEXT_WINDOW },
     }
   }
 
