@@ -314,6 +314,17 @@ export function install(rt) {
       const on = [...new Set(out.map(child => (child.room ? `group "${rt.roomOf(child.room)?.name ?? 'a group'}"` : child.name ?? nameOf(child.to) ?? 'a teammate')))]
       lines.push(on.length > 0 ? `waiting for ${on.join(' and ')} to hand back work${forName}` : `about to go on with work${forName}, whose results came back`)
     }
+    const load = globalThis.__dscordBotLoad?.(botId)
+    if (load !== undefined) {
+      if (load.frontBusy && running.length === 0) {
+        const what = load.frontDoing?.tool ? `: running ${load.frontDoing.tool}${load.frontDoing.target ? ` on ${load.frontDoing.target}` : ''}` : ''
+        lines.push(`busy in front session${what}`)
+      }
+      if (load.activeWorkers > 0 || load.queuedWorkers > 0) {
+        const tag = load.status === 'busy' ? 'busy — ' : ''
+        lines.push(`${tag}workers: ${load.activeWorkers}/${load.maxWorkers} running${load.queuedWorkers > 0 ? `, ${load.queuedWorkers} queued` : ''}`)
+      }
+    }
     if (lines.length === 0) lines.push('idle')
     if (state.questions?.[chat] !== undefined) lines.push('a question card in its own chat waits for the user\'s answer')
     if (state.views?.[chat] !== undefined) lines.push('a view card in its own chat waits for the user\'s answer')

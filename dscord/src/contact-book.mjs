@@ -125,6 +125,14 @@ export class ContactBook {
     return { id, name: known?.name || row?.name || local?.name || id, kind: known?.kind || row?.kind || (local ? 'bot' : 'unknown'),
       ...(known?.ownerId ? { ownerId: known.ownerId } : {}), ...(known?.role ? { role: known.role } : {}),
       rooms: this.rooms(id), reach: reach.via, ...(reach.callAs ? { callAs: reach.callAs } : {}),
+      ...(local?.status !== undefined ? {
+        status: local.status,
+        frontBusy: Boolean(local.frontBusy),
+        ...(local.frontDoing ? { frontDoing: local.frontDoing } : {}),
+        activeWorkers: local.activeWorkers ?? 0,
+        queuedWorkers: local.queuedWorkers ?? 0,
+        maxWorkers: local.maxWorkers ?? 0,
+      } : {}),
       sameDsh: Boolean(local), home: id.slice(id.indexOf(':') + 1),
       introducedBy: row?.introduced_by || null, firstSeenAt: row?.first_seen_at ?? null, firstRoomId: row?.first_room_id || null,
       lastExchangeAt: row?.last_exchange_at ?? null };
@@ -140,8 +148,18 @@ export class ContactBook {
   /** The Bots this Bot can hand work to right now, and how. */
   reachableBots() {
     return this.list({ kind: 'bot' }).filter(contact => contact.reach)
-      .map(({ id, name, role, reach, callAs, rooms }) => ({ id, name, ...(role ? { role } : {}), reach,
-        ...(callAs ? { callAs } : { rooms }) }));
+      .map(({ id, name, role, reach, callAs, rooms, status, frontBusy, frontDoing, activeWorkers, queuedWorkers, maxWorkers }) => ({
+        id, name, ...(role ? { role } : {}), reach,
+        ...(callAs ? { callAs } : { rooms }),
+        ...(status !== undefined ? {
+          status,
+          frontBusy,
+          ...(frontDoing ? { frontDoing } : {}),
+          activeWorkers,
+          queuedWorkers,
+          maxWorkers,
+        } : {}),
+      }));
   }
 
   open({ id, direction, peer, via, roomId, origin, status, taskId, detail }) {

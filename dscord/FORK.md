@@ -51,6 +51,18 @@ ACP agent 可能回报空字符串错误码，`??` 会把空串保留下来，`L
 - 工具限定 `trigger_type` 为 `issue_rejected` / `negative_feedback`，传入 `issue_id` 时只读查询 `issue.sqlite` 获取真实标题与 `reject` 评论拼入证据；
 - 内置 `evaluateRetrospectGate()` 预留决策入口（当前默认检查无待审卡片即放行），供后续接入 `jev-like` 决策模型控制流。
 
+### 8. 前台任务轻重自治、繁忙状态自动排队与负载均衡调度 — `work-core.mjs` / `contact-book.mjs` / `tools.js` / `handoffs.js` / `message-context.mjs` / `prompt.js`
+
+**为什么**：
+1. 原 `WorkCore` 在 `serveFront()` 与 `guard()` 中对主 Bot 前台一刀切拦截所有非 `FRONT_TOOLS` 工具（包括外部 MCP 如 MissionGo、本地只读命令等），并且在原生网页直聊（无房间 `origin`）时调 `dispatch_work` 强制要求 `issueId`，逼得 Bot 为了查几条工单而临时创建再取消伪造的 `#18` 事项；
+2. 前台自己处理轻量任务时处于繁忙状态，但原 `message_bot` 默认 `when="now"`（`steer=true`）会直接插队打断目标 Bot 正在执行的回合；同时 `contacts` 和 `list_bots` 缺少前台繁忙 + 后台 Worker 负载画像，主 Bot 无法按负载均衡原则绕过繁忙节点。
+
+**改成**：
+- 解除前台对非 `FRONT_TOOLS` 的硬拦截（仅保留 `CARD_TOOLS` 桌面卡片拦截与后台工作者的 `WORKER_DENY` 边界），并在 `message-context.mjs` 提示词中明确：轻量任务由前台直接调工具当轮完成，重度耗时任务调 `dispatch_work` 交给后台工作者；
+- `WorkCore.dispatch()` 在主会话已 `serveFront` 但无房间 `origin` 且无 `issueId`（原生网页直聊派工）时自动生成 `{ direct: true, ... }` fallback `origin`，不再逼 Bot 伪造临时 Issue；
+- `WorkCore` 实时跟踪 `frontBusy`/`frontDoing` 与后台 Worker 负载（`loadView()`），暴露到 `localBot()`、`ContactBook.reachableBots()`（`event.contacts`）以及 `handoffs.js` 的 `rt.statusOf()`（`list_bots`）；
+- `tools.js` 的 `message_bot` 在目标 Bot 前台正忙时默认改为排队（`when="queue"`，`steer=false`），仅显式传 `when="now"` 时才中途插队纠偏；`prompt.js`（`MAIN_RULES`）与 `message-context.mjs` 增加负载均衡调度规则，优先分流给 `idle` 或低负载队友。
+
 ## 不是改在这里的问题
 
 Codex 路由的 Bot 拿不到 DS 工具（`message_bot`/`remember` 等）是**上游设计冲突**：Codex 的 MCP 配置是进程级，而 ds-bot 让同 route 的所有 Bot 共用一个 `codex app-server` 进程。修它要让引擎按 Bot 分进程，本 fork 暂未改。详见 `bot-knowledge/docs/findings/2026-11-11-codex-tool-bridge.md`。

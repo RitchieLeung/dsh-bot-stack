@@ -27,8 +27,8 @@ const STUBS = {
     export const createUserMessage = x => x;
   `,
   'deep-view/core': `
-    export const checkShownView = () => {};
-    export const showViewDescription = '';
+    export const checkShownView = () => ({ title: '', view: {}, interactive: false });
+    export const showViewDescription = () => 'show_view';
     export const showViewParameters = {};
   `,
 };

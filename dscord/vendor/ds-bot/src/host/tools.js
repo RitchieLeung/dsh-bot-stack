@@ -172,7 +172,7 @@ export function install(rt) {
       when: {
         type: 'string',
         enum: ['now', 'queue'],
-        description: '"now" (default): a working Bot reads your message at its next step, between its current actions, and answers once its current work is done; use it for questions, information it needs, corrections and warnings. "queue": it reads your message only after its current work is done, as a separate task; use it only for a new task unrelated to what it is doing now. With reply_to "user" the message always queues.',
+        description: '"queue" (default): if the target Bot is busy working in its front session, your message queues and is read after its current work finishes; if it is idle, it starts right away. "now": interrupt into a working Bot\'s current turn at its next step — use ONLY for urgent corrections, warnings, or information its running task needs right away. With reply_to "user" the message always queues.',
       },
       request_id: {
         type: 'string',
@@ -201,7 +201,7 @@ export function install(rt) {
           to: target.id,
           message: String(args.message ?? '').replace(/\r\n?/g, '\n').trim(),
           reply_to: args.reply_to === 'user' ? 'user' : 'me',
-          when: args.when === 'queue' ? 'queue' : 'now',
+          when: args.when === 'now' ? 'now' : 'queue',
         },
       })
       // What the caller gets for a request that was admitted before.
@@ -252,7 +252,7 @@ export function install(rt) {
         const joins = before !== undefined && agent.inbox?.remove?.(earlier.message.id) === true
         if (before !== undefined && !joins) long = await rt.attachLong(text, `Message from ${sender.name}.txt`) ?? long
         const working = rt.live.get(chat)?.turn !== undefined
-        const steer = (args.when !== 'queue' && !toUser) || (joins && earlier.steered)
+        const steer = (args.when === 'now' && !toUser) || (joins && earlier.steered)
         const exchangeId = joins ? earlier.message.source.exchangeId : randomUUID()
         if (joins) rt.forgetDelivery?.(exchangeId)
         else if (!toUser) rt.openWork(exchangeId, { from: sender.id, to: target.id, parent: work })

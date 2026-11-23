@@ -74,11 +74,14 @@ const internalsIn = text => INTERNALS.filter(([, pattern]) => pattern.test(text)
 const OMISSION = /取舍|没有?写[入进]|未写[入进]|(?:删掉|删去|去掉|省略|筛掉|过滤掉|略去)了|不对外/;
 const TEXT_FILE = /\.(?:md|txt|log|csv|json|html?)$/i;
 const coreOf = matrixId => [...cores.values()].find(core => core.node.id === matrixId);
-/** A Bot in this DSH by its full identity ID, with the name message_bot calls it by. */
+/** A Bot in this DSH by its full identity ID, with the name message_bot calls it by and its live load snapshot. */
 export const localBot = matrixId => {
   const core = coreOf(matrixId);
-  return core ? { name: core.botName || core.node.localpart || matrixId, nativeBotId: core.node.nativeBotId } : undefined;
+  return core ? { name: core.botName || core.node.localpart || matrixId, nativeBotId: core.node.nativeBotId, ...core.loadView() } : undefined;
 };
+/** Look up a local Bot's WorkCore load snapshot by its native DS-Bot ID (for ds-bot statusOf/list_bots). */
+export const botLoadByNativeId = nativeBotId => cores.get(nativeBotId)?.loadView();
+globalThis.__dscordBotLoad = botLoadByNativeId;
 // Every status change is kept on the task as its timeline.
 const mark = (task, to, by, extra = {}) => {
   (task.events ||= []).push({ at: new Date().toISOString(), from: task.status ?? null, to, by });
@@ -114,6 +117,9 @@ export class WorkCore {
     Object.assign(this, { ctx, native, node, state, save, maxWorkers, timeoutMs });
     this.state.tasks ||= {};
     this.frontSessions = new Set();
+    this.frontBusy = false;
+    this.frontDoing = null;
+    this.frontSince = null;
     this.served = new WeakSet();
     this.timers = new Map();
     this.origin = null;
@@ -135,21 +141,18 @@ export class WorkCore {
   guard(exec) {
     const id = exec.agent?.session?.id ?? exec.agent?.id;
     if (CARD_TOOLS.has(exec.name) && (this.frontSessions.has(id) || this.workerTask(id))) return CARD_REFUSAL;
-    if (this.frontSessions.has(id) && !FRONT_TOOLS.has(exec.name)) return FRONT_REFUSAL;
     if (this.workerTask(id) && WORKER_DENY.has(exec.name)) return '工作者只做事并用 work_report 汇报，不直接对外说话或改团队设置。';
     return undefined;
   }
 
-  /** Make the Bot's current native Session a front: front tools in, work tools out. */
+  /** Make the Bot's current native Session a front: add dispatch/task tools while keeping its own tools for quick tasks. */
   async serveFront(agent) {
     const id = agent?.session?.id;
     if (!id) return;
     this.botName = (await this.native.bot(this.node.nativeBotId).catch(() => null))?.name || this.botName;
     this.frontSessions.add(id);
-    // The front reaches only FRONT_TOOLS (the guard below refuses everything else),
-    // none of which run a shell or touch arbitrary files. Leaving the default `ask`
-    // policy only strands the Bot on an approval card the user cannot answer from
-    // another session view, so the front is trusted the same way workers are.
+    // Leaving the default `ask` policy only strands the Bot on an approval card the user
+    // cannot answer from another session view, so the front is trusted the same way workers are.
     this.ctx.get?.('approval')?.setPolicy(agent, 'never');
     const tools = agent.ctx?.tools;
     if (!tools || this.served.has(agent)) return;
@@ -159,8 +162,8 @@ export class WorkCore {
     }
     const served = (this.ctx.tools?.schemas?.(agent) || tools.schemas?.(agent) || []).map(tool => tool.name);
     for (const name of served) {
-      if (FRONT_TOOLS.has(name)) continue;
-      // Tools in the Agent's own scope cannot be restricted; the guard refuses them.
+      if (!CARD_TOOLS.has(name)) continue;
+      // Desktop card tools have no UI in DSCord; everything else stays available so the front can handle quick tasks itself.
       try { tools.restrict?.({ deny: [name] }); } catch { /* guarded */ }
     }
   }
@@ -168,7 +171,7 @@ export class WorkCore {
   frontTools() {
     return [
       { name: 'dispatch_work', output,
-        description: '把需要工具或多步操作的工作交给一个新的工作者 Session。工作者有完整工具，但看不到这里的对话。立即返回任务编号；结果由核心直接回复到原消息并附上文件，你之后会在 workResults 里看到。',
+        description: '把耗时、多步、跨多文件或重度的工作交给一个新的后台工作者 Session，不阻塞前台。轻量/快速的查询或简单操作由前台自己直接完成，不必派工。工作者有完整工具，但看不到这里的对话。立即返回任务编号；结果由核心直接回复到原消息并附上文件，你之后会在 workResults 里看到。',
         parameters: {
           title: { type: 'string', required: true, description: '一句话的任务名' },
           brief: { type: 'string', required: true, description: '完整、自足的任务说明：要做什么、依据哪些原话或文件、做到什么程度' },
@@ -225,9 +228,13 @@ export class WorkCore {
     issueId = String(issueId || '').trim();
     // 事务（issue）派工：没有要回复的房间消息，origin 由 issue 提供；worker 结果
     // 由事务模块的写回轮询从 native-bridge.json 读走并回写 issue，不回任何房间。
+    // 原生网页直聊派工：主会话已 serveFront 但无房间 origin 时，自动生成直聊 origin，
+    // worker 完成后走 onWorkerResult 把结果回注给主 Bot 会话，不必伪造临时 issueId。
     const origin = issueId
       ? { issueId, senderId: 'issue', senderName: 'issue', body: brief, roomId: null, via: null, files: [] }
-      : (this.origin || this.askedOrigin());
+      : (this.origin || this.askedOrigin() || (this.frontSessions.size > 0
+        ? { direct: true, senderId: 'user', senderName: '用户', body: brief, roomId: null, via: null, files: [] }
+        : null));
     // Work needs a message to answer. A turn the native host resumed on its own after a
     // restart has none, and must not quietly redo work the restart left unknown.
     if (!origin) return '现在没有要回复的消息，不能派工。若这是事务（issue）上的工作，派工时带上 issueId，结果会由事务模块写回该事务；宿主重启后结果不确定的任务不会自动重做；对方要重做时会再发消息。';
@@ -472,6 +479,20 @@ export class WorkCore {
       this.contacts?.open({ ...exchange, direction: 'in', peer: asker?.node.id || source.senderSessionId, status: 'received' });
       if (asker && asker !== this && this.node.id) asker.contacts?.open({ ...exchange, direction: 'out', peer: this.node.id, status: 'sent' });
     }
+    if (this.frontSessions.has(session.id)) {
+      if (event.type === 'turn/start') {
+        this.frontBusy = true;
+        this.frontSince = new Date().toISOString();
+      } else if (event.type === 'tool/call') {
+        this.frontBusy = true;
+        this.frontSince ||= new Date().toISOString();
+        this.frontDoing = { tool: event.data?.name || null, target: targetOf(event.data?.arguments), since: new Date().toISOString() };
+      } else if (event.type === 'turn/end') {
+        this.frontBusy = false;
+        this.frontDoing = null;
+        this.frontSince = null;
+      }
+    }
     const task = this.workerTask(session.id);
     if (!task) return false;
     if (event.type === 'turn/start') task.busy = true;
@@ -565,13 +586,33 @@ export class WorkCore {
     for (const task of this.tasks()) if (ended(task) && pending(task)) await this.notify(task, { kind: 'result' });
   }
 
+  /** Live front busy state and background worker capacity snapshot, used for load-balanced routing. */
+  loadView() {
+    const live = this.tasks().filter(task => !ended(task));
+    const activeWorkers = live.filter(task => task.status === 'running').length;
+    const queuedWorkers = live.filter(task => task.status === 'queued').length;
+    const status = this.frontBusy || activeWorkers >= this.maxWorkers
+      ? 'busy'
+      : activeWorkers > 0 || queuedWorkers > 0 ? 'working' : 'idle';
+    return {
+      status,
+      frontBusy: Boolean(this.frontBusy),
+      frontDoing: this.frontDoing || null,
+      frontSince: this.frontSince || null,
+      activeWorkers,
+      queuedWorkers,
+      maxWorkers: this.maxWorkers,
+    };
+  }
+
   /** What the workers are doing now, for the node's kernel state. */
   view() {
     const live = this.tasks().filter(task => !ended(task));
     const worker = task => ({ taskId: task.id, title: task.title, stage: task.status, roomId: task.origin?.roomId || null,
       requesterId: task.origin?.senderId || null, progress: task.progress || null, doing: task.doing || null, waiting: task.waiting || null,
       since: task.startedAt || task.createdAt, toolCalls: task.toolCalls || 0 });
-    return { workers: live.filter(task => task.status === 'running').map(worker),
+    return { ...this.loadView(),
+      workers: live.filter(task => task.status === 'running').map(worker),
       queue: live.filter(task => task.status === 'queued').map(worker) };
   }
 
