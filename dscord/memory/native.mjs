@@ -130,10 +130,26 @@ export function installNativeMemory(rt) {
   };
   rt.teamTools.push(defineTool({ name: 'remember', description: 'Save or correct one source-attributed fact in your persistent memory; returns the stored record and sources.', parameters: params, output,
     async execute(args, exec) { const id = caller(exec); const result = await memory.remember(id, args, memory.current(id, exec.agent?.id) || null); news.set(id, Date.now()); return stringify(result); } }));
+  const RECALL_MAX_CHARS = 12_000;
+  function boundRecallResult(result) {
+    const raw = stringify(result);
+    if (raw.length <= RECALL_MAX_CHARS || !result || !Array.isArray(result.entries)) return raw;
+    const kept = [];
+    for (const entry of result.entries) {
+      const candidate = stringify({ ...result, entries: [...kept, entry], truncated: true, shown: kept.length + 1, totalReturned: result.entries.length });
+      if (candidate.length > RECALL_MAX_CHARS && kept.length > 0) break;
+      kept.push(entry);
+    }
+    return stringify({ ...result, entries: kept, truncated: true, shown: kept.length, totalReturned: result.entries.length, note: 'Result capped to protect context budget; narrow your query/topic/limit to read specific records.' });
+  }
   rt.teamTools.push(defineTool({ name: 'recall', description: 'Search durable memories semantically with exact source readback. Scope defaults to own/team/current room. Use all for other rooms, history to inspect withdrawn/expired records.',
     parameters: { query: string('Natural-language search'), scope: string('own, team, group, room:<ID> or all'), topic: string('Topic'), subjectId: string('Exact identity to filter'),
-      history: { type: 'boolean', description: 'Include old records with explicit status, never treat these as current facts' }, limit: { type: 'number', description: 'Maximum records (1–30)' } }, output,
-    async execute(args, exec) { const id = caller(exec); return stringify(await memory.recall(id, args, memory.current(id, exec.agent?.id) || null)); } }));
+      history: { type: 'boolean', description: 'Include old records with explicit status, never treat these as current facts' }, limit: { type: 'number', description: 'Maximum records (1–15, default 10)' } }, output,
+    async execute(args, exec) {
+      const id = caller(exec);
+      const limit = Number.isFinite(args?.limit) ? Math.max(1, Math.min(15, Math.trunc(args.limit))) : 10;
+      return boundRecallResult(await memory.recall(id, { ...args, limit }, memory.current(id, exec.agent?.id) || null));
+    } }));
   rt.teamTools.push(defineTool({ name: 'forget', description: 'Withdraw one memory by its exact ID; history is retained and current recall excludes it.',
     parameters: { id: string('Memory ID'), scope: string('Current room by default; own, team, all or room:<ID>'), expectedRevision: { type: 'number' } }, output,
     async execute(args, exec) { const id = caller(exec); const result = memory.forget(id, args, memory.current(id, exec.agent?.id) || null); news.set(id, Date.now()); return stringify(result); } }));

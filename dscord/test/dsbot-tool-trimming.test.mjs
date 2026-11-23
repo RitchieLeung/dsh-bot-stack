@@ -116,3 +116,27 @@ test('tools.js omits MAIN_ONLY_TOOLS for non-main Bots and masks redundant DSH n
     hooks.deregister();
   }
 });
+
+test('steward linesFor triggers compaction at 45% and caps 1M-window models at 120K/160K', async () => {
+  const { linesFor, DEFAULT_CHECK_RATIO, MAX_CHECK_TOKENS, MAX_HARD_TOKENS } = await import('../vendor/ds-bot/src/host/steward.js');
+  assert.equal(DEFAULT_CHECK_RATIO, 0.45);
+  assert.equal(MAX_CHECK_TOKENS, 120_000);
+  assert.equal(MAX_HARD_TOKENS, 160_000);
+
+  // 128K model (DeepSeek): 45% check / 65% hard
+  const ds = linesFor({ window: 128_000, reserve: 8_000 });
+  assert.equal(ds.usable, 120_000);
+  assert.equal(ds.check, 54_000);
+  assert.equal(ds.hard, 78_000);
+
+  // 200K model: 45% check / 65% hard
+  const mid = linesFor({ window: 200_000, reserve: 16_000 });
+  assert.equal(mid.usable, 184_000);
+  assert.equal(mid.check, Math.floor(184_000 * 0.45));
+  assert.equal(mid.hard, Math.floor(184_000 * 0.65));
+
+  // 1M model (Kimi / Gemini): capped at 120K check / 160K hard instead of 450K/800K
+  const huge = linesFor({ window: 1_000_000, reserve: 32_000 });
+  assert.equal(huge.check, 120_000);
+  assert.equal(huge.hard, 160_000);
+});

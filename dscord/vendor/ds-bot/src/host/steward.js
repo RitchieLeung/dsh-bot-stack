@@ -10,21 +10,27 @@
 import { estimateTokens } from './text.js'
 
 // For a model that declares no window.
-export const DEFAULT_WINDOW = 500_000
-export const DEFAULT_CHECK_RATIO = 0.8
-// Context sizes between requests are estimates, so the hard line stays a little
-// below what the model can actually take.
-const HARD_SHARE = 0.95
+export const DEFAULT_WINDOW = 200_000
+export const DEFAULT_CHECK_RATIO = 0.45
+// Absolute caps so 1M-window models (Kimi, Gemini) still compact/rotate at a
+// sane token budget instead of dragging 400K-800K contexts through every step.
+export const MAX_CHECK_TOKENS = 120_000
+export const MAX_HARD_TOKENS = 160_000
+// Context sizes between requests are estimates, so the hard line stays below
+// the window and forces rotation promptly if the steward keeps going past check.
+const HARD_SHARE = 0.65
 const STEWARD_TOKENS = 6_000
 const STEWARD_LINE_MAX = 1_500
 
-export function linesFor({ window, reserve, checkRatio }) {
+export function linesFor({ window, reserve, checkRatio, maxCheckTokens, maxHardTokens }) {
   const declared = Number.isInteger(window) && window > 0 ? window : DEFAULT_WINDOW
   const room = Number.isInteger(reserve) && reserve > 0 ? reserve : 0
   const usable = Math.max(declared - room, Math.floor(declared / 2))
-  const hard = Math.floor(usable * HARD_SHARE)
+  const hardCap = Number.isInteger(maxHardTokens) && maxHardTokens > 0 ? maxHardTokens : MAX_HARD_TOKENS
+  const checkCap = Number.isInteger(maxCheckTokens) && maxCheckTokens > 0 ? maxCheckTokens : MAX_CHECK_TOKENS
+  const hard = Math.min(Math.floor(usable * HARD_SHARE), hardCap)
   const ratio = typeof checkRatio === 'number' && checkRatio > 0 && checkRatio < 1 ? checkRatio : DEFAULT_CHECK_RATIO
-  return { window: declared, usable, hard, check: Math.min(Math.floor(usable * ratio), hard) }
+  return { window: declared, usable, hard, check: Math.min(Math.floor(usable * ratio), checkCap, hard) }
 }
 
 export const STEWARD_SYSTEM = [
