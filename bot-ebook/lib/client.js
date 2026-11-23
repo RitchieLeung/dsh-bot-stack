@@ -150,7 +150,10 @@ window.__ModuleLoader__.load({
       });
       let json;
       try { json = await response.json(); } catch {
-        throw Object.assign(new Error(`接口返回无法解析（HTTP ${response.status}）`), { code: 'BAD_RESPONSE' });
+        const msg = response.status === 524 || response.status === 504
+          ? `请求超时（HTTP ${response.status}），请重试`
+          : `接口返回无法解析（HTTP ${response.status}）`;
+        throw Object.assign(new Error(msg), { code: 'BAD_RESPONSE' });
       }
       if (!json || json.ok !== true) {
         throw Object.assign(new Error(json?.error?.message || '未知错误'), { code: json?.error?.code || 'INTERNAL' });
@@ -617,15 +620,38 @@ window.__ModuleLoader__.load({
     function ImportDialog({ onClose, onDone }) {
       const [tab, setTab] = React.useState('file');
       const [busy, setBusy] = React.useState(false);
+      const [progressText, setProgressText] = React.useState('');
       const [error, setError] = React.useState(null);
       const [preview, setPreview] = React.useState(null);
       const [url, setUrl] = React.useState('');
       const [dragging, setDragging] = React.useState(false);
       const fileRef = React.useRef(null);
+      const aliveRef = React.useRef(true);
+
+      React.useEffect(() => {
+        aliveRef.current = true;
+        return () => { aliveRef.current = false; };
+      }, []);
+
+      const pollJob = async (jobId, initialStage) => {
+        setProgressText(initialStage || '正在解析…');
+        while (aliveRef.current) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          if (!aliveRef.current) return null;
+          const status = await call('import_status', { jobId });
+          if (!aliveRef.current) return null;
+          if (status.stage) setProgressText(status.stage);
+          if (status.status === 'done') return status.preview;
+          if (status.status === 'error') {
+            throw Object.assign(new Error(status.error?.message || '解析失败'), { code: status.error?.code || 'INTERNAL' });
+          }
+        }
+        return null;
+      };
 
       const doImportFile = async (file) => {
         if (!file) return;
-        setBusy(true); setError(null); setPreview(null);
+        setBusy(true); setError(null); setPreview(null); setProgressText('正在上传并解析…');
         try {
           const dataUrl = await new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -633,18 +659,20 @@ window.__ModuleLoader__.load({
             reader.onerror = () => reject(new Error('读取文件失败'));
             reader.readAsDataURL(file);
           });
-          const value = await call('import_file', { name: file.name, mime: file.type, data: dataUrl });
-          setPreview(value.preview);
-        } catch (caught) { setError(caught); } finally { setBusy(false); }
+          const value = await call('import_file', { name: file.name, mime: file.type, data: dataUrl, async: true });
+          const result = value.preview ? value.preview : (value.jobId ? await pollJob(value.jobId, value.stage) : null);
+          if (aliveRef.current && result) setPreview(result);
+        } catch (caught) { if (aliveRef.current) setError(caught); } finally { if (aliveRef.current) { setBusy(false); setProgressText(''); } }
       };
 
       const doImportUrl = async () => {
         if (!url.trim()) return;
-        setBusy(true); setError(null); setPreview(null);
+        setBusy(true); setError(null); setPreview(null); setProgressText('正在抓取网页…');
         try {
-          const value = await call('import_url', { url: url.trim() });
-          setPreview(value.preview);
-        } catch (caught) { setError(caught); } finally { setBusy(false); }
+          const value = await call('import_url', { url: url.trim(), async: true });
+          const result = value.preview ? value.preview : (value.jobId ? await pollJob(value.jobId, value.stage) : null);
+          if (aliveRef.current && result) setPreview(result);
+        } catch (caught) { if (aliveRef.current) setError(caught); } finally { if (aliveRef.current) { setBusy(false); setProgressText(''); } }
       };
 
       const commit = async () => {
@@ -672,7 +700,7 @@ window.__ModuleLoader__.load({
                 onDragOver: event => { event.preventDefault(); setDragging(true); },
                 onDragLeave: () => setDragging(false),
                 onDrop: event => { event.preventDefault(); setDragging(false); doImportFile(event.dataTransfer.files[0]); },
-              }, busy ? h('span', null, h('span', { className: 'eb-spinner' }), '正在用模型转换…') : '点这里选文件，或拖进来（PDF / EPUB / markdown / txt）'),
+              }, busy ? h('span', null, h('span', { className: 'eb-spinner' }), progressText || '正在解析…') : '点这里选文件，或拖进来（PDF / EPUB / markdown / txt）'),
               h('input', {
                 ref: fileRef, type: 'file', accept: '.pdf,.epub,.md,.markdown,.txt,.html,.htm', style: { display: 'none' },
                 onChange: event => { doImportFile(event.target.files[0]); event.target.value = ''; },
@@ -685,7 +713,7 @@ window.__ModuleLoader__.load({
                 onKeyDown: event => { if (event.key === 'Enter') doImportUrl(); },
               }),
               h('div', { style: { marginTop: 10 } },
-                h('button', { className: 'eb-btn', type: 'button', disabled: busy || !url.trim(), onClick: doImportUrl }, '抓取并转换'))),
+                h('button', { className: 'eb-btn', type: 'button', disabled: busy || !url.trim(), onClick: doImportUrl }, busy ? (progressText || '正在抓取并转换…') : '抓取并转换'))),
           error ? h('div', { style: { marginTop: 12 } }, h(ErrorBox, { error })) : null,
           preview ? h('div', { className: 'eb-preview' },
             h('div', { className: 'eb-preview-title' }, preview.book.title || '（未命名）'),

@@ -58,6 +58,49 @@ export function splitMarkdownChapters(text, fallbackTitle = '正文') {
   return chapters.length ? chapters : [{ title: fallbackTitle, body: source }];
 }
 
+const PLAIN_HEADING_RE = /^(?:#\s+(.+?)\s*#*|第[零一二三四五六七八九十百千万两0-9]{1,8}[章节回部卷篇](?:[\s：:·、.-].*)?|Chapter\s+[0-9IVXLCM]+(?:[\s:：.-].*)?)$/i;
+
+/**
+ * 纯文本（.txt）→ 章节：按常见中英文章节标题切分；若全文无章节标题，则按阅读长度切块或整篇成章。
+ * @param {string} text
+ * @param {string} fallbackTitle
+ * @returns {{ title: string, body: string }[]}
+ */
+export function splitPlainChapters(text, fallbackTitle = '正文') {
+  const source = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!source) return [];
+  const chapters = [];
+  let current = null;
+  const flush = () => {
+    if (current && current.body.trim()) {
+      chapters.push({ title: current.title, body: current.body.trim() });
+    }
+    current = null;
+  };
+  for (const line of source.split('\n')) {
+    const trimmed = line.trim();
+    const match = trimmed.length <= 60 ? PLAIN_HEADING_RE.exec(trimmed) : null;
+    if (match) {
+      flush();
+      const title = (match[1] || trimmed).trim();
+      current = { title, body: `# ${title}\n\n` };
+    } else if (current) {
+      current.body += `${line}\n`;
+    } else if (trimmed) {
+      current = { title: fallbackTitle, body: `${line}\n` };
+    }
+  }
+  flush();
+  if (chapters.length > 1) return chapters;
+  if (source.length > 30000) {
+    return chunkText(source, 20000).map((part, idx) => ({
+      title: `${fallbackTitle}（${idx + 1}）`,
+      body: part,
+    }));
+  }
+  return chapters.length ? chapters : [{ title: fallbackTitle, body: source }];
+}
+
 /**
  * 网页正文抽取：去掉脚本/样式/导航/页眉页脚，优先取 <article>/<main>，再把块级
  * 标签换行、标题转成 markdown 前缀。这只是「拿原始文字」，最终整理交给模型。
@@ -124,12 +167,25 @@ export function buildConversionPrompt(rawChunk, meta = {}) {
  *   stream 是注入的模型调用（host 侧用 llm.stream 适配而来）
  * @returns {Promise<{ book: object, chapters: { title: string, body: string }[] }>}
  */
-export async function convertToBook(chunks, { stream, meta = {} }) {
-  const parts = [];
-  for (let index = 0; index < chunks.length; index += 1) {
-    const prompt = buildConversionPrompt(chunks[index], { ...meta, index, total: chunks.length });
-    parts.push(await stream(prompt));
+export async function convertToBook(chunks, { stream, meta = {}, onProgress, concurrency = 3 }) {
+  const total = chunks.length;
+  const parts = new Array(total);
+  const workerCount = Math.max(1, Math.min(Number(concurrency) || 1, total || 1));
+  let nextIndex = 0;
+  let done = 0;
+
+  async function worker() {
+    while (nextIndex < total) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const prompt = buildConversionPrompt(chunks[index], { ...meta, index, total });
+      parts[index] = await stream(prompt);
+      done += 1;
+      onProgress?.({ done, total });
+    }
   }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   const chapters = splitMarkdownChapters(parts.join('\n\n'));
   return {
     book: {

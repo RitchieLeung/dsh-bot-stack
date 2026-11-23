@@ -58,6 +58,11 @@ export function createEbookHandler({ store, ingest, assistant, models }) {
         if (typeof body.url !== 'string' || !body.url.trim()) return fail('INVALID_INPUT', '缺少链接');
         return { ok: true, value: await ingest.importUrl(body) };
       }
+      if (action === 'import_status') {
+        if (!ingest?.importStatus) return fail('UNSUPPORTED', '采集能力未启用');
+        if (typeof body.jobId !== 'string' || !body.jobId) return fail('INVALID_ID', '缺少任务 id');
+        return { ok: true, value: ingest.importStatus(body.jobId) };
+      }
       if (action === 'import_commit') {
         if (!ingest?.commit) return fail('UNSUPPORTED', '采集能力未启用');
         if (!body.preview || typeof body.preview !== 'object') return fail('INVALID_INPUT', '缺少预览结果');

@@ -12,11 +12,13 @@
 
 import path from 'node:path';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { openEbookStore } from './store.js';
 import { createEbookHandler } from './handler.js';
-import { chunkText, convertToBook, extractWebBody } from './ingest.js';
+import { chunkText, convertToBook, extractWebBody, splitMarkdownChapters, splitPlainChapters } from './ingest.js';
 import { createAssistant } from './assistant.js';
 import { extractPdfText } from './pdf.js';
+import { extractEpubBook } from './epub.js';
 
 // Cordis 要求先声明才能碰这些服务：少了任一行，冷启动时 entry 直接激活失败。
 export const inject = ['connection', 'llm', 'web', 'agents', 'sessionController'];
@@ -67,12 +69,47 @@ export function apply(ctx, config = {}) {
     return opened;
   };
   const model = resolveModel(config);
+  const jobs = new Map();
+  const JOB_TTL_MS = 30 * 60 * 1000;
+
+  function pruneJobs() {
+    const now = Date.now();
+    for (const [id, job] of jobs) {
+      if (job.status !== 'running' && now - job.updatedAt > JOB_TTL_MS) {
+        jobs.delete(id);
+      }
+    }
+  }
+
+  /** 动态选取可用模型：优先 config.model；否则优先 catalog 里的 deepseek-flash/chat 或首个可用模型。 */
+  async function pickModel() {
+    if (config.model && config.model.provider && config.model.model) return model;
+    try {
+      const catalog = await ctx.sessionController.modelCatalog();
+      const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+      const all = [];
+      for (const group of groups) {
+        const provider = group?.id || group?.provider;
+        for (const item of group?.models || []) {
+          const id = typeof item === 'string' ? item : item?.id;
+          if (provider && id) all.push({ provider, model: id });
+        }
+      }
+      if (all.length > 0) {
+        return all.find(m => m.provider === model.provider && m.model === model.model)
+          || all.find(m => /flash|mini|haiku|fast/i.test(m.model))
+          || all[0];
+      }
+    } catch { /* fallback to default */ }
+    return model;
+  }
 
   /** 模型转换：llm.stream → 拼接成一段文本（host 侧适配 ingest 的 stream 接口）。 */
   async function modelToMarkdown(prompt, signal) {
+    const activeModel = await pickModel();
     const chunks = ctx.llm.stream({
-      provider: model.provider,
-      model: model.model,
+      provider: activeModel.provider,
+      model: activeModel.model,
       messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
       signal,
     });
@@ -83,30 +120,106 @@ export function apply(ctx, config = {}) {
     return text;
   }
 
-  async function importFile(body) {
+  function startJob(runner) {
+    pruneJobs();
+    const id = `job-${randomUUID().slice(0, 12)}`;
+    const job = { id, status: 'running', stage: '正在解析文件…', done: 0, total: 0, preview: null, error: null, updatedAt: Date.now() };
+    jobs.set(id, job);
+    const update = (patch) => {
+      Object.assign(job, patch, { updatedAt: Date.now() });
+    };
+    Promise.resolve()
+      .then(() => runner(update))
+      .then((preview) => update({ status: 'done', stage: '解析完成', preview }))
+      .catch((err) => update({
+        status: 'error',
+        stage: '解析失败',
+        error: { code: err?.code || 'INTERNAL', message: err?.message || String(err) },
+      }));
+    return { jobId: id, status: job.status, stage: job.stage, done: 0, total: 0 };
+  }
+
+  function importStatus(jobId) {
+    pruneJobs();
+    const job = jobs.get(jobId);
+    if (!job) throw Object.assign(new Error('找不到该导入任务（可能已过期，请重新上传）'), { code: 'NOT_FOUND' });
+    return {
+      jobId: job.id,
+      status: job.status,
+      stage: job.stage,
+      done: job.done,
+      total: job.total,
+      preview: job.preview,
+      error: job.error,
+    };
+  }
+
+  async function runImportFile(body, update = () => {}) {
     const name = String(body.name || '未命名');
+    const title = name.replace(/\.[^.]+$/, '') || '未命名';
     const lower = name.toLowerCase();
     const bytes = decodeBody(body.data);
+
+    // 1. EPUB：直接解包 OPF 书脊，秒级完成，不走模型分块
+    if (lower.endsWith('.epub') || body.mime === 'application/epub+zip') {
+      update({ stage: '正在解析 EPUB 章节…' });
+      const epub = extractEpubBook(bytes, { fallbackTitle: title });
+      return {
+        book: { id: slug(epub.title || name), title: epub.title || title, author: epub.author || '', source: name, description: '' },
+        chapters: epub.chapters,
+      };
+    }
+
+    // 2. Markdown / TXT：本身已有清晰文本结构，直接切章，秒级完成
+    if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+      const rawText = decodeText(bytes);
+      if (!rawText.trim()) throw Object.assign(new Error('文件内容为空'), { code: 'EMPTY_EXTRACT' });
+      return {
+        book: { id: slug(name), title, author: '', source: name, description: '' },
+        chapters: splitMarkdownChapters(rawText, title),
+      };
+    }
+    if (lower.endsWith('.txt')) {
+      const rawText = decodeText(bytes);
+      if (!rawText.trim()) throw Object.assign(new Error('文件内容为空'), { code: 'EMPTY_EXTRACT' });
+      return {
+        book: { id: slug(name), title, author: '', source: name, description: '' },
+        chapters: splitPlainChapters(rawText, title),
+      };
+    }
+
+    // 3. PDF / HTML：抽取原始文字后交模型并发整理
     let rawText;
     if (lower.endsWith('.pdf') || body.mime === 'application/pdf') {
+      update({ stage: '正在提取 PDF 文字…' });
       rawText = await extractPdfText(bytes);
     } else if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+      update({ stage: '正在提取网页正文…' });
       rawText = extractWebBody(decodeText(bytes));
     } else {
-      rawText = decodeText(bytes); // markdown / txt
+      rawText = decodeText(bytes);
     }
     if (!rawText.trim()) {
       throw Object.assign(new Error('没有抽到文字：可能是扫描件 PDF 或空文件'), { code: 'EMPTY_EXTRACT' });
     }
     const chunks = chunkText(rawText, CHUNK_LIMIT);
-    const preview = await convertToBook(chunks, {
+    update({ stage: `正在用模型整理排版（0/${chunks.length} 块）…`, done: 0, total: chunks.length });
+    return convertToBook(chunks, {
       stream: modelToMarkdown,
-      meta: { id: slug(name), title: name.replace(/\.[^.]+$/, ''), source: name },
+      meta: { id: slug(name), title, source: name },
+      concurrency: 3,
+      onProgress: ({ done, total }) => update({ stage: `正在用模型整理排版（${done}/${total} 块）…`, done, total }),
     });
+  }
+
+  async function importFile(body) {
+    if (body.async) return startJob((update) => runImportFile(body, update));
+    const preview = await runImportFile(body);
     return { preview };
   }
 
-  async function importUrl(body) {
+  async function runImportUrl(body, update = () => {}) {
+    update({ stage: '正在抓取网页内容…' });
     const res = await ctx.web.fetch({ url: body.url });
     const content = res.body?.content || '';
     const rawText = res.body?.kind === 'html' ? extractWebBody(content) : content;
@@ -114,10 +227,18 @@ export function apply(ctx, config = {}) {
       throw Object.assign(new Error('网页没有抓到正文（可能是登录墙或纯脚本页）'), { code: 'EMPTY_EXTRACT' });
     }
     const chunks = chunkText(rawText, CHUNK_LIMIT);
-    const preview = await convertToBook(chunks, {
+    update({ stage: `正在用模型整理排版（0/${chunks.length} 块）…`, done: 0, total: chunks.length });
+    return convertToBook(chunks, {
       stream: modelToMarkdown,
-      meta: { id: slug(res.url), title: '', source: res.url },
+      meta: { id: slug(res.url || body.url), title: '', source: res.url || body.url },
+      concurrency: 3,
+      onProgress: ({ done, total }) => update({ stage: `正在用模型整理排版（${done}/${total} 块）…`, done, total }),
     });
+  }
+
+  async function importUrl(body) {
+    if (body.async) return startJob((update) => runImportUrl(body, update));
+    const preview = await runImportUrl(body);
     return { preview };
   }
 
@@ -133,7 +254,7 @@ export function apply(ctx, config = {}) {
     return store().replaceBook(next, preview?.chapters || []);
   }
 
-  const ingest = { importFile, importUrl, commit };
+  const ingest = { importFile, importUrl, importStatus, commit };
   const assistant = createAssistant({
     agents: ctx.agents,
     sessionController: ctx.sessionController,
