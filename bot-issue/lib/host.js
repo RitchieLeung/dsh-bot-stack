@@ -933,6 +933,7 @@ export function apply(ctx, config = {}) {
       },
     }), 'bot-issue: tool unlink');
 
+    const emptyCommentStreak = new Map();
     toolsCtx.effect(() => register({
       name: 'issue_comment',
       description: '给事务追加一条评论（发现、结论、交接说明等），同时会出现在时间线里。支持通过 replyTo 指定回复某条历史评论并通知原评论作者。评论会直接给人看：写人话，别写工具名（issue_get 这类）、状态码（open/in_review）或版本号（v10）。有截图/产出图时用 images 一起贴上来。',
@@ -940,15 +941,15 @@ export function apply(ctx, config = {}) {
         type: 'object',
         properties: {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
-          body: { type: 'string', description: '评论内容' },
+          body: { type: 'string', description: '必填：评论正文内容（即使附带 images 也请写一句简短说明）' },
           replyTo: { type: 'integer', description: '可选：要回复那条评论的编号（从事务详情时间线里方括号中的数字读取，如 42）' },
           images: {
             type: 'array',
             items: { type: 'string' },
-            description: '要贴进评论的本地图片绝对路径（png/jpg/jpeg/gif/webp/svg，最多 8 张）。只发图不写字也行。',
+            description: '要贴进评论的本地图片绝对路径（png/jpg/jpeg/gif/webp/svg，最多 8 张）。',
           },
         },
-        required: ['id'],
+        required: ['id', 'body'],
       },
       output: {
         schema: {
@@ -968,7 +969,16 @@ export function apply(ctx, config = {}) {
         // 先校验图片、回复目标和正文，再落库：校验失败不该留下孤儿附件。
         const planned = planImages(args.images);
         const text = String(args.body || '').trim();
-        if (!text && !planned.length) throw new Error('评论不能为空');
+        const streakKey = String(exec?.agent?.id || exec?.session?.id || 'global');
+        if (!text && !planned.length) {
+          const streak = (emptyCommentStreak.get(streakKey) || 0) + 1;
+          emptyCommentStreak.set(streakKey, streak);
+          if (streak >= 3) {
+            throw new Error(`已连续 ${streak} 次调用 issue_comment 缺少 body 参数，请立即停止重试此工具！请直接在聊天回复中把结果发给用户，不要继续空转。`);
+          }
+          throw new Error(`评论不能为空：缺少必填参数 body（请传入 { id: "${args.id}", body: "你的评论内容" }，不要只传 id）。`);
+        }
+        emptyCommentStreak.delete(streakKey);
         const replyToId = args.replyTo !== undefined && args.replyTo !== null ? args.replyTo : null;
         if (replyToId !== null) {
           const target = Number.isSafeInteger(replyToId) ? issue.comments.find(c => c.id === replyToId) : null;

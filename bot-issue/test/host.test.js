@@ -454,13 +454,28 @@ test('issue_comment allows an images-only comment but still rejects an empty one
   const id = created.value.issue.id;
   const exec = { agent: { session: { id: 'session-main' } } };
   const comment = tools.find(t => t.name === 'issue_comment');
+  assert.deepEqual(comment.parameters.required, ['id', 'body']);
 
   const only = await comment.execute({ id, body: '', images: [pngFile()] }, exec);
   assert.equal(only.images, 1);
 
   await assert.rejects(
     () => comment.execute({ id, body: '   ' }, exec),
+    err => /评论不能为空/.test(err.message) && /body/.test(err.message),
+  );
+  await assert.rejects(
+    () => comment.execute({ id }, exec),
     err => /评论不能为空/.test(err.message),
+  );
+  await assert.rejects(
+    () => comment.execute({ id }, exec),
+    err => /连续 3 次/.test(err.message) && /停止重试/.test(err.message),
+  );
+  // 正常提交一次后计数清零
+  await comment.execute({ id, body: '恢复正常' }, exec);
+  await assert.rejects(
+    () => comment.execute({ id }, exec),
+    err => /评论不能为空/.test(err.message) && !/连续/.test(err.message),
   );
 });
 
