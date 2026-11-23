@@ -339,3 +339,42 @@ test('in_review→open with rejection notifies counterpart with 验收不通过 
   assert.equal(res.value.issue.status, 'open');
   assert.ok(seen.some(body => body.includes('验收不通过') && body.includes('边界场景未覆盖')));
 });
+
+test('discuss creates a temporary room and done/cancelled auto-destroys it', async () => {
+  const createdRooms = [];
+  const destroyedRooms = [];
+  const storeRef = openIssueStore({ dbPath: ':memory:' });
+  const handle = createIssueHandler({
+    store: storeRef,
+    discussRoom: {
+      create: async (issue, opts) => {
+        createdRooms.push({ issueId: issue.id, opts });
+        return { id: 'room-tmp-1', name: `讨论 · #${issue.number}` };
+      },
+      destroy: async (issue, reason) => {
+        destroyedRooms.push({ roomId: issue.discussionRoom.id, reason });
+        return storeRef.clearDiscussionRoom(issue.id, reason);
+      },
+    },
+  });
+
+  const { value: { issue } } = await handle({ action: 'create', title: '临时讨论群测试' });
+  const noTopic = await handle({ action: 'discuss', id: issue.id, note: '' });
+  assert.equal(noTopic.ok, false);
+  assert.equal(noTopic.error.code, 'OPINION_REQUIRED');
+
+  const discussed = await handle({ action: 'discuss', id: issue.id, note: '对齐接口边界', members: ['b1', 'b2'], autoStart: true });
+  assert.equal(discussed.ok, true);
+  assert.equal(discussed.value.issue.status, 'discussing');
+  assert.equal(discussed.value.room.id, 'room-tmp-1');
+  assert.equal(discussed.value.issue.discussionAutoStart, true);
+  assert.equal(createdRooms.length, 1);
+
+  // 取消（人为终态）→ 自动焚毁临时群
+  const cancelled = await handle({ action: 'update', id: issue.id, status: 'cancelled', note: '需求作废' });
+  assert.equal(cancelled.ok, true);
+  assert.equal(cancelled.value.issue.discussionRoom, null);
+  assert.equal(destroyedRooms.length, 1);
+  assert.equal(destroyedRooms[0].roomId, 'room-tmp-1');
+  storeRef.close();
+});

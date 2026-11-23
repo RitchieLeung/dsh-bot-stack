@@ -122,6 +122,10 @@ function issueFrom(row) {
     assignee: row.assigneeSessionId
       ? { sessionId: row.assigneeSessionId, name: row.assigneeName || null, at: row.assignedAt || null }
       : null,
+    discussionRoom: row.discussionRoomId
+      ? { id: row.discussionRoomId, name: row.discussionRoomName || null }
+      : null,
+    discussionAutoStart: Boolean(row.discussionAutoStart),
   };
 }
 
@@ -231,6 +235,9 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
   if (!existingCols.includes('assigneeName')) db.exec('ALTER TABLE issues ADD COLUMN assigneeName TEXT');
   if (!existingCols.includes('assignedAt')) db.exec('ALTER TABLE issues ADD COLUMN assignedAt INTEGER');
   if (!existingCols.includes('priority')) db.exec("ALTER TABLE issues ADD COLUMN priority TEXT NOT NULL DEFAULT 'P2'");
+  if (!existingCols.includes('discussionRoomId')) db.exec('ALTER TABLE issues ADD COLUMN discussionRoomId TEXT');
+  if (!existingCols.includes('discussionRoomName')) db.exec('ALTER TABLE issues ADD COLUMN discussionRoomName TEXT');
+  if (!existingCols.includes('discussionAutoStart')) db.exec('ALTER TABLE issues ADD COLUMN discussionAutoStart INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_number ON issues(number)');
 
   // Migration: 评论表支持回复指定评论（replyToId）和作者会话标识（authorSessionId）。
@@ -395,8 +402,40 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     };
   }
 
+  /** 统计最近一次进入「讨论中」之后的签字确认（kind='agree'）列表。 */
+  function consensusOf(row, comments) {
+    let startIdx = 0;
+    for (let i = comments.length - 1; i >= 0; i--) {
+      const c = comments[i];
+      if (c.kind === 'status' && /→\s*讨论中/.test(c.body || '')) {
+        startIdx = i + 1;
+        break;
+      }
+    }
+    const seenKeys = new Set();
+    const agreed = [];
+    for (let i = startIdx; i < comments.length; i++) {
+      const c = comments[i];
+      if (c.kind !== 'agree') continue;
+      const key = c.authorSessionId || `${c.authorKind}:${c.authorName || ''}`;
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      agreed.push({
+        name: c.authorName || (c.authorKind === 'user' ? '我' : '同事'),
+        sessionId: c.authorSessionId || null,
+        kind: c.authorKind,
+        at: c.at,
+      });
+    }
+    return {
+      autoStart: Boolean(row.discussionAutoStart),
+      agreed,
+    };
+  }
+
   function getFull(id) {
-    const issue = issueFrom(requireIssue(id));
+    const rawRow = requireIssue(id);
+    const issue = issueFrom(rawRow);
     const rows = selectComments.all(issue.id);
     const byId = new Map(rows.map(row => [row.id, row]));
     const comments = rows.map(row => ({
@@ -411,6 +450,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       replyTo: row.replyToId ? replySummary(byId.get(row.replyToId)) : null,
       at: row.at,
     }));
+    const consensus = consensusOf(rawRow, comments);
     const dispatches = selectDispatches.all(issue.id).map(row => ({
       id: row.id,
       issueId: row.issueId,
@@ -427,6 +467,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       dependsOn,
       blocks,
       depsOpen: dependsOn.filter(dep => dep.status !== 'done').length,
+      consensus,
       comments,
       dispatches,
     };
@@ -512,6 +553,27 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     }
     if (isRejection && !(actor.kind === 'user' || actor.isMain === true)) {
       throw failure('FORBIDDEN_TRANSITION', `只有主 Bot 或用户能「${statusLabel(next)}」（当前是「${statusLabel(from)}」）`);
+    }
+    // 讨论中 → 进行中（退出讨论的共识硬门禁）：
+    // - 用户本人拥有最高拍板权；system 内部派工桥接由用户点击启动触发，同样放行；
+    // - 默认档（discussionAutoStart=0）：禁止任何 Bot 擅自开工，须由用户在面板点「确认共识 · 启动」；
+    // - 授权档（discussionAutoStart=1）：仅主 Bot 可推进，且必须已有非主 Bot 实现方（如有执行人则须含执行人）的显式签字（kind='agree'）。
+    if (next !== from && from === 'discussing' && next === 'dispatched' && actor.kind !== 'user' && actor.kind !== 'system') {
+      if (!row.discussionAutoStart) {
+        throw failure('CONSENSUS_USER_REQUIRED', '当前讨论需由用户最终拍板开工：请将共识方案汇总写入评论，等待用户在面板点击「确认共识 · 启动」');
+      }
+      if (actor.isMain !== true) {
+        throw failure('FORBIDDEN_TRANSITION', '只有主 Bot 或用户能结束讨论并推进到「进行中」');
+      }
+      const cRows = selectComments.all(id);
+      const { agreed } = consensusOf(row, cRows);
+      const hasImplementer = row.assigneeSessionId
+        ? agreed.some(a => a.sessionId === row.assigneeSessionId)
+        : agreed.some(a => a.kind !== 'user' && (a.sessionId ? a.sessionId !== actor.id : a.name !== actor.name));
+      if (!hasImplementer) {
+        const who = row.assigneeName ? `执行人（${row.assigneeName}）` : '参与讨论的实现方 Bot';
+        throw failure('CONSENSUS_REQUIRED', `尚未达成多方共识：需要${who}通过 issue_comment(agree: true) 显式确认方案可行后，才允许推进到「进行中」`);
+      }
     }
     const rawOpinion = [patch.note, patch.opinion, patch.rejection, patch.result]
       .find(val => typeof val === 'string' && val.trim());
@@ -888,9 +950,32 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     return getFull(issue.id);
   }
 
+  /** 绑定或更新事务关联的临时讨论群（以及是否授权多方共识自动开工）。 */
+  function setDiscussionRoom(id, { roomId, roomName = null, autoStart } = {}) {
+    const row = requireIssue(id);
+    const nextRoomId = roomId !== undefined ? (roomId ? String(roomId) : null) : row.discussionRoomId;
+    const nextRoomName = roomId !== undefined ? (roomId ? (roomName ? String(roomName) : null) : null) : row.discussionRoomName;
+    const nextAutoStart = autoStart !== undefined ? (autoStart ? 1 : 0) : (row.discussionAutoStart ? 1 : 0);
+    db.prepare('UPDATE issues SET discussionRoomId = ?, discussionRoomName = ?, discussionAutoStart = ?, updatedAt = ?, version = version + 1 WHERE id = ?')
+      .run(nextRoomId, nextRoomName, nextAutoStart, now(), row.id);
+    return getFull(row.id);
+  }
+
+  /** 清空事务关联的临时讨论群，并在时间线记录自动/手动销毁痕迹。 */
+  function clearDiscussionRoom(id, reason = '临时讨论群已销毁') {
+    const row = requireIssue(id);
+    if (!row.discussionRoomId) return getFull(row.id);
+    const ts = now();
+    db.prepare('UPDATE issues SET discussionRoomId = NULL, discussionRoomName = NULL, updatedAt = ?, version = version + 1 WHERE id = ?')
+      .run(ts, row.id);
+    insertComment.run(row.id, 'system', '', null, String(reason), 'status', null, ts);
+    return getFull(row.id);
+  }
+
   return {
     list, get: getFull, create, update, comment, activeDispatch, syncTask, counts,
     assign, loads, versions, userReplies, seen, markSeen, markSeenMany,
+    setDiscussionRoom, clearDiscussionRoom,
     addAttachment, getAttachment,
     tags, createTag, deleteTag, link, unlink,
     /** Back-compat: the old name for the label library. */

@@ -12,6 +12,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
     // 聊天里点 #N 后、事务面板挂载前，先记下要打开的编号。
     let pendingOpen = null;
+    let openRoomSession = null;
 
     const STATUS_LABEL = {
       open: '待处理', discussing: '讨论中', dispatched: '进行中',
@@ -36,8 +37,8 @@ window.__ModuleLoader__.load({
     };
     // Actions available from each status. start = 派工（走 dispatch_work 桥接）。
     const ACTIONS = {
-      open: [['start', '启动'], ['discussing', '标记讨论'], ['cancelled', '取消']],
-      discussing: [['start', '启动'], ['open', '退回待处理'], ['cancelled', '取消']],
+      open: [['start', '启动'], ['discussing', '发起讨论'], ['cancelled', '取消']],
+      discussing: [['start', '确认共识 · 启动'], ['open', '退回待处理'], ['cancelled', '取消']],
       dispatched: [['start', '重派'], ['open', '退回待处理'], ['cancelled', '取消']],
       in_review: [['done', '验收通过'], ['reject', '验收不通过'], ['cancelled', '取消']],
       done: [['open', '重开']],
@@ -122,8 +123,14 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 .is-tl-time{font-size:11px;color:var(--dsw-alias-label-secondary)}
 .is-tl-kind{display:inline-block;font-size:10px;border:1px solid var(--dsw-alias-border-l1);border-radius:4px;padding:0 5px;line-height:15px;font-weight:600}
 .is-tl-kind[data-kind="status"],.is-tl-kind[data-kind="assign"]{color:color-mix(in srgb, var(--tlc) 76%, var(--dsw-alias-label-primary));background:color-mix(in srgb, var(--tlc) 14%, transparent);border-color:color-mix(in srgb, var(--tlc) 35%, transparent)}
-.is-tl-kind[data-kind="result"]{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent)}
+.is-tl-kind[data-kind="result"],.is-tl-kind[data-kind="agree"]{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent)}
 .is-tl-kind[data-kind="reject"]{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);border-color:color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent)}
+.is-discuss-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid color-mix(in srgb, var(--dsw-alias-brand-primary) 38%, transparent);background:color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, transparent);color:var(--dsw-alias-brand-primary);border-radius:999px;padding:3px 11px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.is-discuss-chip:hover{background:color-mix(in srgb, var(--dsw-alias-brand-primary) 18%, transparent)}
+.is-consensus-tag{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 12%, transparent);color:var(--dsw-alias-state-success-primary)}
+.is-consensus-mode{font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.is-member-pick{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px}
+.is-check-row{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dsw-alias-label-secondary);margin:8px 0 2px;cursor:pointer;user-select:none}
 .is-tl-reply{margin-left:4px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;padding:1px 6px;border-radius:5px;font-family:inherit}
 .is-tl-reply:hover{color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
 .is-tl-quote{display:block;width:100%;text-align:left;border:0;border-left:2.5px solid var(--qtc, var(--dsw-alias-brand-primary));background:color-mix(in srgb, var(--qtc, var(--dsw-alias-brand-primary)) 8%, var(--dsw-alias-bg-base));color:var(--dsw-alias-label-secondary);padding:4px 9px;border-radius:0 6px 6px 0;font-size:11.5px;line-height:1.45;margin:3px 0 6px;cursor:pointer;font-family:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -345,7 +352,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       return 'secondary';
     }
 
-    const KIND_LABEL = { status: '状态', result: '结果', reject: '验收不通过', assign: '指派' };
+    const KIND_LABEL = { status: '状态', result: '结果', reject: '验收不通过', assign: '指派', agree: '已确认方案' };
 
     // ---- 时间线配色（timeline.test.js 从这里截取）----
     const SYSTEM_COLOR = '#64748b';
@@ -1169,12 +1176,68 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       done: { title: '验收通过', placeholder: '填写验收意见…', inputTitle: '提交后写入闭环结果', emptyErr: '验收必须写意见', btn: '确认验收', btnKind: 'primary' },
       reject: { title: '验收不通过', placeholder: '填写验收不通过的原因与整改要求…', inputTitle: '提交后退回待处理、写入拒审记录并通知经办人', emptyErr: '验收不通过必须填写原因与整改要求', btn: '确认不通过', btnKind: 'danger' },
       cancelled: { title: '取消事务', placeholder: '填写取消原因或处理意见…', inputTitle: '提交后写入时间线并取消事务', emptyErr: '取消必须写处理意见', btn: '确认取消', btnKind: 'danger' },
-      discussing: { title: '标记讨论中', placeholder: '填写讨论焦点或处理意见…', inputTitle: '提交后写入时间线并标记为讨论中', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
+      discussing: { title: '发起讨论', placeholder: '填写讨论焦点或待澄清问题…', inputTitle: '提交后创建临时讨论群并标记为讨论中', emptyErr: '必须填写讨论焦点', btn: '发起讨论', btnKind: 'primary' },
+      consensus_start: { title: '确认共识 · 启动', placeholder: '填写已达成的方案共识或开工要求…', inputTitle: '提交后记录共识结论、转入进行中并派工', emptyErr: '请填写共识说明', btn: '确认并启动', btnKind: 'primary' },
       open: { title: '退回待处理', placeholder: '填写重开或退回待处理的原因…', inputTitle: '提交后写入时间线并退回待处理', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
       dispatched: { title: '转入进行中', placeholder: '填写处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
       in_review: { title: '提交待验收', placeholder: '填写交付结论或处理意见…', inputTitle: '提交后写入时间线并转待验收', emptyErr: '必须填写处理意见', btn: '确认提交', btnKind: 'primary' },
       failed: { title: '标记失败', placeholder: '填写失败原因或处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认标记', btnKind: 'danger' },
     };
+
+    function DiscussDialog({ mode = 'discuss', roster = [], assignee = null, onSubmit, onCancel }) {
+      const defaultSelected = React.useMemo(() => {
+        const set = new Set();
+        const main = roster.find(b => b.isMain);
+        if (main) set.add(main.id);
+        if (assignee?.sessionId) {
+          const hit = roster.find(b => b.sessionId === assignee.sessionId || b.id === assignee.sessionId);
+          if (hit) set.add(hit.id);
+        }
+        return [...set];
+      }, [roster, assignee]);
+      const [topic, setTopic] = React.useState('');
+      const [members, setMembers] = React.useState(defaultSelected);
+      const [autoStart, setAutoStart] = React.useState(false);
+      const [busy, setBusy] = React.useState(false);
+      const [err, setErr] = React.useState(null);
+      const requireTopic = mode === 'discuss';
+      const toggleMember = (bid) => setMembers(prev => prev.includes(bid) ? prev.filter(x => x !== bid) : [...prev, bid]);
+      const submit = async () => {
+        const clean = topic.trim();
+        if (requireTopic && !clean) { setErr('请填写本次要对齐的讨论焦点或疑问'); return; }
+        setBusy(true); setErr(null);
+        try { await onSubmit({ note: clean, members, autoStart }); } catch (caught) { setErr(caught.message || String(caught)); setBusy(false); }
+      };
+      return h('div', { className: 'is-modal-bg', onClick: e => { if (e.target === e.currentTarget && !busy) onCancel(); } },
+        h('div', { className: 'is-modal' },
+          h('div', { className: 'is-modal-title' }, mode === 'room' ? '建立临时讨论群' : '发起讨论（自动建临时群）'),
+          h('textarea', {
+            className: 'is-field', rows: 3, autoFocus: true,
+            value: topic,
+            onChange: e => { setTopic(e.target.value); if (err) setErr(null); },
+            placeholder: requireTopic ? '写清本次要对齐的需求边界、可行性疑问或讨论焦点…' : '可选：本次临时群要同步的议题…',
+          }),
+          roster.length ? h('div', { style: { marginTop: 10 } },
+            h('div', { className: 'is-label', style: { margin: '0 0 4px' } }, '邀请参与讨论的 Bot'),
+            h('div', { className: 'is-member-pick' },
+              roster.map(bot => {
+                const active = members.includes(bot.id);
+                return h('button', {
+                  key: bot.id, type: 'button', className: 'is-tag', 'data-active': String(active),
+                  onClick: () => toggleMember(bot.id),
+                }, `${bot.name}${bot.isMain ? ' (主)' : ''}`);
+              }))) : null,
+          mode === 'discuss' ? h('label', { className: 'is-check-row', title: '默认需要你在面板点击「确认共识 · 启动」才能开工；勾选后，主 Bot 与实现方签字达成共识即可自动推进' },
+            h('input', { type: 'checkbox', checked: autoStart, onChange: e => setAutoStart(e.target.checked) }),
+            h('span', null, '允许 Agent 达成多方共识后直接开工（默认需你亲自拍板启动）')) : null,
+          err ? h('div', { className: 'is-modal-err' }, err) : null,
+          h('div', { className: 'is-modal-foot' },
+            h('button', { className: 'is-btn', type: 'button', disabled: busy, onClick: onCancel }, '取消'),
+            h('button', {
+              className: 'is-btn', 'data-kind': 'primary', type: 'button', disabled: busy,
+              onClick: submit,
+            }, busy ? '创建中…' : (mode === 'room' ? '创建临时群' : '发起讨论并建群')))));
+    }
 
     function ReviewDialog({ kind, onSubmit, onCancel }) {
       const [value, setValue] = React.useState('');
@@ -1574,7 +1637,8 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       const [started, setStarted] = React.useState(false);
       const [depMode, setDepMode] = React.useState(null); // null | 'dependsOn' | 'blocks'
       const [depBusy, setDepBusy] = React.useState(false);
-      const [review, setReview] = React.useState(null); // null | 'done' | 'reject'：验收/打回意见浮窗
+      const [review, setReview] = React.useState(null);
+      const [discussModal, setDiscussModal] = React.useState(null); // null | 'discuss' | 'room' // null | 'done' | 'reject'：验收/打回意见浮窗
       const commentRefs = React.useRef({});
       const composerRef = React.useRef(null);
       const flashTimerRef = React.useRef(null);
@@ -1601,7 +1665,9 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       React.useEffect(() => { refresh(); }, [refresh, refreshKey]);
 
       const act = async (status) => {
-        // 所有状态流转（除 start 派工外）均需填写处理意见：统一开浮窗。
+        if (status === 'discussing') { setDiscussModal('discuss'); return; }
+        if (status === 'start' && issue?.status === 'discussing') { setReview('consensus_start'); return; }
+        // 所有状态流转（除普通 start 派工外）均需填写处理意见：统一开浮窗。
         if (status !== 'start') { setReview(status); return; }
         setBusy(true); setNote(null); setError(null);
         try {
@@ -1612,9 +1678,31 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
         } catch (caught) { setError(caught); } finally { setBusy(false); }
       };
 
+      const submitDiscuss = async ({ note: topic, members, autoStart }) => {
+        const value = await call('discuss', { id, note: topic, members, autoStart, authorKind: 'user' });
+        setDiscussModal(null);
+        setNote(value?.room?.id ? '已建立临时讨论群并唤醒成员' : '已标记为讨论中');
+        onChanged?.();
+        await refresh();
+      };
+
+      const closeRoom = async () => {
+        setBusy(true); setNote(null); setError(null);
+        try {
+          await call('close_room', { id });
+          setNote('临时讨论群已销毁');
+          onChanged?.();
+          await refresh();
+        } catch (caught) { setError(caught); } finally { setBusy(false); }
+      };
+
       // 浮窗点确认：带意见提交状态流转。失败抛给浮窗显示，不落面板级 error。
       const submitReview = async (kind, opinion) => {
-        if (kind === 'done') {
+        if (kind === 'consensus_start') {
+          const value = await call('start', { id, note: opinion, authorKind: 'user' });
+          if (value?.dispatched) { setStarted(true); setNote(value.note || '已确认共识并交给主 Bot 启动'); }
+          else setNote(`已记录共识，但未派工：${value?.reason || '未知原因'}`);
+        } else if (kind === 'done') {
           await call('update', { id, status: 'done', result: opinion, note: opinion, authorKind: 'user' });
           setNote('已验收通过，意见已写入闭环结果');
         } else if (kind === 'reject') {
@@ -1775,6 +1863,29 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
                 issue.assignee ? h('div', { className: 'is-meta-row' },
                   h('span', { className: 'is-meta-k' }, '执行人'),
                   h('div', { className: 'is-meta-v' }, issue.assignee.name || issue.assignee.sessionId)) : null,
+                (issue.discussionRoom || issue.status === 'discussing' || issue.status === 'dispatched') ? h('div', { className: 'is-meta-row' },
+                  h('span', { className: 'is-meta-k' }, '讨论群'),
+                  h('div', { className: 'is-meta-v' },
+                    issue.discussionRoom?.id ? [
+                      h('button', {
+                        key: 'open', type: 'button', className: 'is-discuss-chip',
+                        title: `打开临时群：${issue.discussionRoom.name || issue.discussionRoom.id}（验收通过或取消后自动销毁）`,
+                        onClick: () => openRoomSession?.(issue.discussionRoom.id),
+                      }, `💬 进入讨论群`),
+                      h('button', {
+                        key: 'close', type: 'button', className: 'is-dep-cancel', disabled: busy,
+                        title: '立即销毁此临时讨论群（事务时间线记录保留）',
+                        onClick: closeRoom,
+                      }, '销毁群'),
+                    ] : h('button', {
+                      type: 'button', className: 'is-dep-addbtn', disabled: busy,
+                      onClick: () => setDiscussModal('room'),
+                    }, '💬 建临时讨论群'),
+                    issue.status === 'discussing' ? h('span', { className: 'is-consensus-mode' },
+                      issue.discussionAutoStart ? '模式：多方共识可自动开工' : '模式：需你拍板启动') : null,
+                    ...(issue.consensus?.agreed || []).map(a => h('span', {
+                      key: a.sessionId || a.name, className: 'is-consensus-tag',
+                    }, `✓ ${a.name} 已确认`)))) : null,
                 h('div', { className: 'is-meta-row' },
                   h('span', { className: 'is-meta-k' }, '标签'),
                   h('div', { className: 'is-meta-v' },
@@ -1854,6 +1965,13 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
           kind: review,
           onSubmit: text => submitReview(review, text),
           onCancel: () => setReview(null),
+        }) : null,
+        discussModal ? h(DiscussDialog, {
+          mode: discussModal,
+          roster,
+          assignee: issue.assignee,
+          onSubmit: submitDiscuss,
+          onCancel: () => setDiscussModal(null),
         }) : null);
     }
 
@@ -2132,6 +2250,11 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
     }
 
     function apply(ctx) {
+      openRoomSession = (roomId) => {
+        if (!roomId) return;
+        const ws = ctx.get?.('uiWorkspace') ?? ctx.uiWorkspace;
+        ws?.openSession?.(roomId);
+      };
       const style = document.createElement('style');
       style.textContent = CSS;
       document.head.appendChild(style);

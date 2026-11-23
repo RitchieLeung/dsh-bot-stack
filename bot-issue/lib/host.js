@@ -587,6 +587,76 @@ export function apply(ctx, config = {}) {
   };
 
 
+  // ---- 临时讨论群桥接：通过进程内 /api/dscord/kernel 建群、发开场白、终态自动焚毁 ----
+  const callKernel = async (endpoint, payload = {}) => {
+    if (typeof ctx.connection?.createSharedFetchHandler !== 'function') {
+      throw new Error('当前宿主不支持进程内群聊桥接');
+    }
+    const handler = ctx.connection.createSharedFetchHandler('/api');
+    const response = await handler.fetch(new Request('http://localhost/api/dscord/kernel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint, payload }),
+    }), ctx.connection.browserPeer);
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error?.message || `内核请求 ${endpoint} 失败 (${response.status})`);
+    }
+    return data.value;
+  };
+
+  const discussRoom = {
+    async create(issue, { members = [], topic = '', autoStart = false } = {}) {
+      const roster = botRoster(statePath);
+      const validIds = new Set(roster.map(b => b.id));
+      const picked = new Set();
+      if (mainBot?.id && validIds.has(mainBot.id)) picked.add(mainBot.id);
+      for (const m of members) {
+        const hit = roster.find(b => b.id === m || b.sessionId === m || b.name === m);
+        if (hit) picked.add(hit.id);
+      }
+      if (issue.assignee?.sessionId) {
+        const hit = roster.find(b => b.sessionId === issue.assignee.sessionId || b.id === issue.assignee.sessionId);
+        if (hit) picked.add(hit.id);
+      }
+      const memberIds = [...picked];
+      if (memberIds.length === 0) return null;
+      const ref = issue.number ? `#${issue.number}` : issue.id;
+      const shortTitle = String(issue.title || '').trim().slice(0, 22);
+      const name = `讨论 · ${ref} ${shortTitle}`.trim();
+      const room = await callKernel('create-room', {
+        members: memberIds,
+        name,
+        ...(mainBot?.id && picked.has(mainBot.id) ? { admin: mainBot.id } : {}),
+      });
+      if (!room?.id) return null;
+      const gateRule = autoStart
+        ? '本群已授权多方共识自动开工：实现方用 issue_comment(agree: true) 签字确认方案可行后，主 Bot 方可汇总共识并推进到「进行中」。'
+        : '本群需由用户最终拍板开工：请对齐需求边界、可行性与实现方案，实现方可签字确认，主 Bot 将共识汇总写入事务评论后等待用户点击「确认共识 · 启动」。';
+      const notice = [
+        `事务 ${ref}「${issue.title}」临时讨论群（验收通过或取消后自动销毁）。`,
+        topic ? `本次讨论焦点：${topic}` : '',
+        '规则：讨论期禁止直接派工写代码。' + gateRule,
+      ].filter(Boolean).join('\n');
+      try { await callKernel('update-room', { id: room.id, notice }); } catch { /* best effort */ }
+      const intro = [
+        `【发起事务讨论】${ref}「${issue.title}」`,
+        topic ? `讨论焦点：${topic}` : '',
+        issue.body ? `事务说明：\n${issue.body.slice(0, 1200)}` : '',
+        '',
+        '请主 Bot 组织受邀成员先澄清需求边界、评估可行性并给出方案，讨论期不要直接派工动代码。达成共识后，实现方请用 issue_comment(agree: true) 签字确认，主 Bot 汇总最终方案。',
+      ].filter(Boolean).join('\n');
+      try { await callKernel('send', { sessionId: room.id, text: intro }); } catch { /* best effort */ }
+      return { id: room.id, name: room.name || name };
+    },
+    async destroy(issue, reason = '临时讨论群已自动销毁') {
+      const roomId = issue?.discussionRoom?.id;
+      if (!roomId) return store().get(issue.id);
+      try { await callKernel('delete-room', { id: roomId }); } catch { /* room may already be deleted */ }
+      return store().clearDiscussionRoom(issue.id, reason);
+    },
+  };
+
   // 工具注册结果：ping 里能看到「这个 entry 现在带没带上工具」，出问题不用翻日志。
   let toolsReport = { registered: [], failed: [], at: null };
   const diagnostics = () => ({
@@ -595,7 +665,7 @@ export function apply(ctx, config = {}) {
   });
 
   const handle = createIssueHandler({
-    store, mainBot, start, diagnostics,
+    store, mainBot, start, diagnostics, discussRoom,
     notify: (issue, comment, commenterSessionId) => {
       notifyActivity(issue, comment, commenterSessionId);
     },
@@ -862,6 +932,12 @@ export function apply(ctx, config = {}) {
             ? `被打回重做：${args.rejection.trim()}`
             : `状态变为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`;
           try { await notifyCounterpart(issue, actor.id, summary); } catch { /* best effort */ }
+          if ((issue.status === 'done' || issue.status === 'cancelled') && issue.discussionRoom?.id) {
+            const reason = issue.status === 'done'
+              ? '临时讨论群已自动销毁（验收通过，结论已沉淀在事务记录中）'
+              : '临时讨论群已自动销毁（事务已取消）';
+            try { await discussRoom.destroy(issue, reason); } catch { /* best effort */ }
+          }
         }
         return { id: issue.id, status: issue.status, priority: issue.priority, version: issue.version };
       },
@@ -943,6 +1019,7 @@ export function apply(ctx, config = {}) {
           id: { type: 'string', description: 'issue id 或 #编号（如 #12）' },
           body: { type: 'string', description: '必填：评论正文内容（即使附带 images 也请写一句简短说明）' },
           replyTo: { type: 'integer', description: '可选：要回复那条评论的编号（从事务详情时间线里方括号中的数字读取，如 42）' },
+          agree: { type: 'boolean', description: '仅在「讨论中」状态有效：设为 true 表示你已理解需求并确认方案可行（签字达成共识）' },
           images: {
             type: 'array',
             items: { type: 'string' },
@@ -990,14 +1067,18 @@ export function apply(ctx, config = {}) {
         const body = [text, markdown].filter(Boolean).join('\n\n');
 
         const actor = caller(exec, nameOf, isMainOf);
+        const isAgree = args.agree === true && issue.status === 'discussing';
         const value = store().comment(issue.id, {
           body,
           authorKind: 'agent',
           authorName: actor.name,
           authorSessionId: actor.id || null,
+          kind: isAgree ? 'agree' : 'comment',
           replyToId,
         });
-        const summary = attachments.length ? `新增评论（${attachments.length} 张图）` : (replyToId ? '回复了评论' : '新增评论');
+        const summary = isAgree
+          ? `已确认讨论方案：${text.slice(0, 80)}`
+          : (attachments.length ? `新增评论（${attachments.length} 张图）` : (replyToId ? '回复了评论' : '新增评论'));
         await notifyActivity(store().get(issue.id), value, actor.id, summary);
         return { id: value.id, images: attachments.length, replyTo: Boolean(value.replyToId) };
       },

@@ -14,7 +14,7 @@
 
 import { PRIORITIES, STATUSES, STATUS_LABELS } from './store.js';
 
-export function createIssueHandler({ store, start, mainBot = null, notify = null, rosterOf = null, diagnostics = null }) {
+export function createIssueHandler({ store, start, mainBot = null, notify = null, rosterOf = null, diagnostics = null, discussRoom = null }) {
   const resolve = () => (typeof store === 'function' ? store() : store);
   const fail = (code, message) => ({ ok: false, error: { code, message } });
 
@@ -113,7 +113,52 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
             : `状态变更为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`;
           try { await notify(issue, { body: summary, statusChange: true }, null); } catch { /* best-effort */ }
         }
-        return { ok: true, value: { issue } };
+        // 人为终态（已闭环 / 已取消）：若关联了临时讨论群，自动用完即焚。
+        let finalIssue = issue;
+        if ((issue.status === 'done' || issue.status === 'cancelled') && issue.discussionRoom?.id && typeof discussRoom?.destroy === 'function') {
+          const reason = issue.status === 'done'
+            ? '临时讨论群已自动销毁（验收通过，结论已沉淀在事务记录中）'
+            : '临时讨论群已自动销毁（事务已取消）';
+          try { finalIssue = await discussRoom.destroy(issue, reason) || resolve().get(issue.id); } catch { /* best-effort */ }
+        }
+        return { ok: true, value: { issue: finalIssue } };
+      }
+      if (action === 'discuss') {
+        if (typeof body.id !== 'string' || !body.id) return fail('INVALID_ID', '缺少 issue id');
+        let issue = resolve().get(body.id);
+        const note = typeof body.note === 'string' ? body.note.trim() : '';
+        const autoStart = body.autoStart === true;
+        if (issue.status === 'open') {
+          if (!note) return fail('OPINION_REQUIRED', '发起讨论必须填写讨论焦点或待澄清问题');
+          issue = resolve().update(issue.id, { status: 'discussing', note }, author);
+        } else if (issue.status !== 'discussing' && issue.status !== 'dispatched') {
+          return fail('FORBIDDEN_TRANSITION', `当前处于「${STATUS_LABELS[issue.status] || issue.status}」，不能发起讨论群`);
+        }
+        if (issue.status === 'discussing') {
+          issue = resolve().setDiscussionRoom(issue.id, { autoStart });
+        }
+        let room = issue.discussionRoom || null;
+        if (!room && typeof discussRoom?.create === 'function') {
+          const created = await discussRoom.create(issue, {
+            members: Array.isArray(body.members) ? body.members : [],
+            topic: note,
+            autoStart,
+          });
+          if (created?.id) {
+            issue = resolve().setDiscussionRoom(issue.id, { roomId: created.id, roomName: created.name || null, autoStart });
+            room = issue.discussionRoom;
+          }
+        }
+        return { ok: true, value: { issue, room } };
+      }
+      if (action === 'close_room') {
+        if (typeof body.id !== 'string' || !body.id) return fail('INVALID_ID', '缺少 issue id');
+        const issue = resolve().get(body.id);
+        if (!issue.discussionRoom?.id) return { ok: true, value: { issue } };
+        const updated = typeof discussRoom?.destroy === 'function'
+          ? (await discussRoom.destroy(issue, '临时讨论群已手动销毁') || resolve().get(issue.id))
+          : resolve().clearDiscussionRoom(issue.id, '临时讨论群已手动销毁');
+        return { ok: true, value: { issue: updated } };
       }
       if (action === 'assign') {
         if (typeof body.id !== 'string' || !body.id) return fail('INVALID_ID', '缺少 issue id');
@@ -172,7 +217,17 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
         if (typeof start !== 'function') {
           return fail('DISPATCH_UNAVAILABLE', '派工桥接尚未启用');
         }
-        const issue = resolve().get(body.id);
+        let issue = resolve().get(body.id);
+        const note = typeof body.note === 'string' ? body.note.trim() : '';
+        if (issue.status === 'discussing' && note) {
+          resolve().comment(issue.id, {
+            body: `已确认共识并启动：${note}`,
+            authorKind: author.kind,
+            authorName: author.name,
+            kind: 'agree',
+          });
+          issue = resolve().get(issue.id);
+        }
         const result = await start(issue);
         return { ok: true, value: result };
       }

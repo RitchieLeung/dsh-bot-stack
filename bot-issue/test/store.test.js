@@ -62,7 +62,7 @@ test('state machine rejects illegal transitions', () => {
 test('dispatched can be pulled back to open (打回)', () => {
   const store = fresh();
   const issue = store.create({ title: 'X' });
-  store.update(issue.id, { status: 'dispatched', note: '开始执行' });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
   const back = store.update(issue.id, { status: 'open', note: '退回待处理' });
   assert.equal(back.status, 'open');
   store.close();
@@ -804,7 +804,7 @@ test('priority can only be adjusted in open or discussing, locked once dispatche
   store.update(issue.id, { status: 'discussing', note: '进入讨论' });
   assert.equal(store.update(issue.id, { priority: 'P1' }).priority, 'P1');
 
-  store.update(issue.id, { status: 'dispatched', note: '开始执行' });
+  store.update(issue.id, { status: 'dispatched', note: '开始执行' }, { kind: 'user' });
   assert.throws(
     () => store.update(issue.id, { priority: 'P0' }),
     err => err.code === 'PRIORITY_LOCKED',
@@ -884,8 +884,8 @@ test('all status transitions require a non-empty processing opinion and record i
   assert.equal(full.status, 'discussing');
   assert.ok(full.comments.some(c => c.kind === 'comment' && c.body === '先拉相关同事对齐口径'));
 
-  // discussing -> dispatched with note succeeds
-  store.update(issue.id, { status: 'dispatched', note: '方案已定，指派开始开发' }, { kind: 'agent', name: '小欣', isMain: true });
+  // discussing -> dispatched with note by user succeeds
+  store.update(issue.id, { status: 'dispatched', note: '方案已定，指派开始开发' }, { kind: 'user', name: '用户' });
   // dispatched -> in_review without opinion fails
   assert.throws(
     () => store.update(issue.id, { status: 'in_review' }, { kind: 'agent', name: '怡丹' }),
@@ -932,5 +932,52 @@ test('in_review→open (验收不通过) requires rejection opinion, restricts t
   const full = store.get(id);
   assert.ok(full.comments.some(c => c.kind === 'status' && c.body === '状态：待验收 → 待处理（验收不通过）'));
   assert.ok(full.comments.some(c => c.kind === 'reject' && c.body === '接口返回缺少分页字段，请整改'));
+  store.close();
+});
+
+test('discussing→dispatched enforces consensus gate (user-only by default, multi-party agree when autoStart)', () => {
+  const store = fresh();
+  const issue = store.create({ title: '新需求对齐' });
+  store.update(issue.id, { status: 'discussing', note: '先拉团队对齐方案' }, { kind: 'user' });
+
+  // 1. 默认档（discussionAutoStart=false）：主 Bot 无法单方面推进到进行中
+  assert.throws(
+    () => store.update(issue.id, { status: 'dispatched', note: '我觉得行了' }, { kind: 'agent', id: 's-main', name: '小欣', isMain: true }),
+    err => err.code === 'CONSENSUS_USER_REQUIRED',
+  );
+
+  // 2. 授权档（discussionAutoStart=true）：未收到实现方签字前，主 Bot 仍被拦截
+  store.setDiscussionRoom(issue.id, { roomId: 'room-1', roomName: '讨论 · #1 新需求对齐', autoStart: true });
+  assert.throws(
+    () => store.update(issue.id, { status: 'dispatched', note: '主 Bot 单方面拍板' }, { kind: 'agent', id: 's-main', name: '小欣', isMain: true }),
+    err => err.code === 'CONSENSUS_REQUIRED',
+  );
+
+  // 3. 主 Bot 自己签字不算实现方签字
+  store.comment(issue.id, { body: '主 Bot 同意', authorKind: 'agent', authorName: '小欣', authorSessionId: 's-main', kind: 'agree' });
+  assert.throws(
+    () => store.update(issue.id, { status: 'dispatched', note: '仍缺实现方签字' }, { kind: 'agent', id: 's-main', name: '小欣', isMain: true }),
+    err => err.code === 'CONSENSUS_REQUIRED',
+  );
+
+  // 4. 非主 Bot 实现方显式签字（kind='agree'）后，主 Bot 方可推进到进行中
+  store.comment(issue.id, { body: '已理解需求，确认按方案 B 可落地', authorKind: 'agent', authorName: '鹤鸣', authorSessionId: 's-heming', kind: 'agree' });
+  const before = store.get(issue.id);
+  assert.equal(before.consensus.agreed.length, 2);
+  assert.equal(before.discussionRoom.id, 'room-1');
+
+  // 非主 Bot 本身仍不能推进状态
+  assert.throws(
+    () => store.update(issue.id, { status: 'dispatched', note: '我自己开工' }, { kind: 'agent', id: 's-heming', name: '鹤鸣', isMain: false }),
+    err => err.code === 'FORBIDDEN_TRANSITION',
+  );
+
+  const started = store.update(issue.id, { status: 'dispatched', note: '主 Bot 与鹤鸣已达成共识，按方案 B 启动' }, { kind: 'agent', id: 's-main', name: '小欣', isMain: true });
+  assert.equal(started.status, 'dispatched');
+
+  // 5. 清空讨论群并记录销毁痕迹
+  const cleared = store.clearDiscussionRoom(issue.id, '临时讨论群已自动销毁');
+  assert.equal(cleared.discussionRoom, null);
+  assert.ok(cleared.comments.some(c => c.body === '临时讨论群已自动销毁'));
   store.close();
 });
