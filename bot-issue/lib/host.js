@@ -820,7 +820,7 @@ export function apply(ctx, config = {}) {
           priority: { type: 'string', enum: priorityEnum, description: '需求紧急程度：P0（紧急）、P1（高）、P2（中）、P3（低）' },
           note: { type: 'string', description: '状态流转处理意见（任何改状态的动作必填：取消写取消原因、提交待验收写交付结论、转进行中/讨论中/重开/失败写处理说明；验收通过也可填 result，打回重做也可填 rejection）' },
           result: { type: 'string', description: '闭环结果/验收意见（用户把 in_review 推进到 done 时必填，写清验证了什么，不要只写状态）' },
-          rejection: { type: 'string', description: '验收不通过/打回意见（把事务标记为 rejected 或把 in_review 打回 dispatched 时必填）' },
+          rejection: { type: 'string', description: '验收不通过/打回意见（把 in_review 打回 open 或 dispatched 时必填）' },
           title: { type: 'string' },
           body: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' }, description: '整组替换事务标签（传空数组=清空）；不传则不动' },

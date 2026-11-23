@@ -220,9 +220,8 @@ test('client.js 所有状态流转按钮（除 start 外）均弹出处理意见
   assert.match(SOURCE, /call\('update',\s*\{\s*id,\s*status:\s*kind,\s*note:\s*opinion/, '通用状态流转提交应携带 note: opinion');
 });
 
-test('client.js 具备独立的 rejected（验收不通过）状态、红色实心徽标与操作按钮', () => {
-  assert.match(SOURCE, /rejected:\s*'验收不通过'/);
-  assert.match(SOURCE, /rejected:\s*\{\s*color:\s*'var\(--dsw-alias-state-error-primary\)',\s*solid:\s*true\s*\}/);
-  assert.match(SOURCE, /\['rejected',\s*'验收不通过'\]/);
-  assert.match(SOURCE, /rejected:\s*\[\['start',\s*'重新派工'\]/);
+test('client.js 待验收状态提供「验收不通过」危险按钮并退回待处理', () => {
+  assert.match(SOURCE, /in_review:\s*\[\['done',\s*'验收通过'\],\s*\['reject',\s*'验收不通过'\]/);
+  assert.match(SOURCE, /reject:\s*'验收不通过'/);
+  assert.match(SOURCE, /call\('update',\s*\{\s*id,\s*status:\s*'open',\s*rejection:\s*opinion/);
 });

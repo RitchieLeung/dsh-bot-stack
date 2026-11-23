@@ -322,7 +322,7 @@ test('update requires opinion (note) for every status transition over HTTP', asy
   assert.ok(got.value.issue.comments.some(c => c.body === '用户决定取消'));
 });
 
-test('update to rejected notifies counterpart with 验收不通过 summary', async () => {
+test('in_review→open with rejection notifies counterpart with 验收不通过 summary', async () => {
   const seen = [];
   const { handle } = handler({ notify: (_issue, payload) => { seen.push(payload.body); } });
   const { value: { issue } } = await handle({ action: 'create', title: '验收不通过测试' });
@@ -330,12 +330,12 @@ test('update to rejected notifies counterpart with 验收不通过 summary', asy
   await handle({ action: 'update', id: issue.id, status: 'in_review', note: '交验' });
   seen.length = 0;
 
-  const noReason = await handle({ action: 'update', id: issue.id, status: 'rejected' });
+  const noReason = await handle({ action: 'update', id: issue.id, status: 'open' });
   assert.equal(noReason.ok, false);
   assert.equal(noReason.error.code, 'REJECTION_REQUIRED');
 
-  const res = await handle({ action: 'update', id: issue.id, status: 'rejected', rejection: '边界场景未覆盖' });
+  const res = await handle({ action: 'update', id: issue.id, status: 'open', rejection: '边界场景未覆盖' });
   assert.equal(res.ok, true);
-  assert.equal(res.value.issue.status, 'rejected');
+  assert.equal(res.value.issue.status, 'open');
   assert.ok(seen.some(body => body.includes('验收不通过') && body.includes('边界场景未覆盖')));
 });

@@ -12,7 +12,7 @@ import path, { dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-export const STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'rejected', 'done', 'failed', 'cancelled'];
+export const STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'done', 'failed', 'cancelled'];
 export const EDITABLE_PRIORITY_STATUSES = new Set(['open', 'discussing']);
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 export const DEFAULT_PRIORITY = 'P2';
@@ -35,7 +35,6 @@ export const STATUS_LABELS = {
   discussing: '讨论中',
   dispatched: '进行中',
   in_review: '待验收',
-  rejected: '验收不通过',
   done: '已闭环',
   failed: '失败',
   cancelled: '已取消',
@@ -43,7 +42,7 @@ export const STATUS_LABELS = {
 /** Label of a status, falling back to the raw id for unknown values. */
 export const statusLabel = status => STATUS_LABELS[status] || String(status || '');
 /** Status ids as whole words, for rewriting raw ids inside old comment text. */
-const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|rejected|done|failed|cancelled)\b/g;
+const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|done|failed|cancelled)\b/g;
 
 /** A label is a short free-text name; longer input is truncated, not rejected. */
 const TAG_MAX_LEN = 40;
@@ -71,7 +70,7 @@ export function normalizeTags(input) {
 function issueRef(row) {
   return row.number ? `#${row.number}「${row.title}」` : `「${row.title}」`;
 }
-export const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'rejected'];
+export const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review'];
 export const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
 
 // Who may move where. A dispatched issue is owned by its worker until it reports
@@ -79,9 +78,8 @@ export const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
 const TRANSITIONS = {
   open: new Set(['discussing', 'dispatched', 'cancelled']),
   discussing: new Set(['open', 'dispatched', 'cancelled']),
-  dispatched: new Set(['in_review', 'rejected', 'failed', 'cancelled', 'open']),
-  in_review: new Set(['done', 'rejected', 'dispatched', 'open', 'cancelled']),
-  rejected: new Set(['dispatched', 'open', 'discussing', 'cancelled']),
+  dispatched: new Set(['in_review', 'failed', 'cancelled', 'open']),
+  in_review: new Set(['done', 'dispatched', 'open', 'cancelled']),
   done: new Set(['open']),
   failed: new Set(['open', 'cancelled']),
   cancelled: new Set(['open']),
@@ -507,8 +505,8 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       throw failure('VERSION_CONFLICT', `issue 已被改动（v${row.version}），请重新读取后再写`);
     }
     // 闭环（in_review→done）只有用户能点：主 Bot 的终点是「待验收」，验收通过由人把关。
-    // 验收不通过（→rejected 或 in_review→dispatched）主 Bot 或用户都能做——拒审时必须写原因。
-    const isRejection = next !== from && (next === 'rejected' || (from === 'in_review' && next === 'dispatched'));
+    // 验收不通过（in_review→open 或 in_review→dispatched）主 Bot 或用户都能做——拒审时必须写原因。
+    const isRejection = next !== from && from === 'in_review' && (next === 'open' || next === 'dispatched');
     if (next !== from && from === 'in_review' && next === 'done' && actor.kind !== 'user') {
       throw failure('FORBIDDEN_TRANSITION', '只有用户能「已闭环」；主 Bot 推进到「待验收」即视为交验，请用户验收');
     }
@@ -573,7 +571,10 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     if (nextTags) writeTags(id, nextTags);
     const updated = { ...issueFrom(selectIssue.get(id)), tags: nextTags ?? tagsOf(id) };
     if (next !== from) {
-      insertComment.run(id, actor.kind || 'system', actor.name || '', null, `状态：${statusLabel(from)} → ${statusLabel(next)}`, 'status', null, now());
+      const statusBody = isRejection
+        ? `状态：${statusLabel(from)} → ${statusLabel(next)}（验收不通过）`
+        : `状态：${statusLabel(from)} → ${statusLabel(next)}`;
+      insertComment.run(id, actor.kind || 'system', actor.name || '', null, statusBody, 'status', null, now());
       if (isRejection) {
         insertComment.run(id, actor.kind || 'system', actor.name || '', null, rejectionText, 'reject', null, now());
       } else if (next !== 'done' && opinion) {
@@ -759,7 +760,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const map = {};
     for (const row of db.prepare(`
       SELECT assigneeSessionId AS sid, COUNT(*) AS n FROM issues
-      WHERE assigneeSessionId IS NOT NULL AND status IN ('dispatched', 'in_review', 'rejected')
+      WHERE assigneeSessionId IS NOT NULL AND status IN ('dispatched', 'in_review')
       GROUP BY assigneeSessionId`).all()) {
       map[row.sid] = row.n;
     }
