@@ -13,7 +13,7 @@ const handoffs = await import('../vendor/ds-bot/src/host/handoffs.js');
 const hostTools = await import('../vendor/ds-bot/src/host/tools.js');
 const hostPrompt = await import('../vendor/ds-bot/src/host/prompt.js');
 
-const { WorkCore, localBot, CARD_REFUSAL } = workCore;
+const { WorkCore, localBot, CARD_REFUSAL, sweepEphemeralSessions } = workCore;
 
 function makeCore({ id = '@xiaoxin:local', nativeBotId = 'bot-xiaoxin', localpart = 'xiaoxin', maxWorkers = 2 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dscord-front-test-'));
@@ -347,4 +347,29 @@ test('WorkCore archives finished worker sessions on finish, turn/end retry, and 
   assert.equal(state.tasks['T-retry'].archived, true);
 
   core.dispose();
+});
+
+test('sweepEphemeralSessions archives all finished worker (workers/T-*) and subagent (parentSessionId) sessions across all nodes while sparing main & running sessions', async () => {
+  const archived = [];
+  const ctx = {
+    workspaceRegistry: {
+      archivedSessionIds: ['s-already-archived'],
+      archiveSession: async (id) => {
+        if (id === 's-running-worker') throw new Error('WorkspaceActiveSessionError');
+        archived.push(id);
+      },
+    },
+    sessionQuery: {
+      listSessions: async () => [
+        { id: 's-main-bot', cwd: '/home/u/dsh-workspace/yidan' },
+        { id: 's-orphan-worker', cwd: '/home/u/.dsh/dscord/web/nodes/bbb8a96d/workers/T-418ba5e0' },
+        { id: 's-running-worker', cwd: '/home/u/.dsh/dscord/web/nodes/7b7a2a25/workers/T-c43ce0b8' },
+        { id: 's-subagent', cwd: '/home/u/dsh-workspace/yidan', parentSessionId: 's-main-bot' },
+        { id: 's-already-archived', cwd: '/home/u/.dsh/dscord/web/nodes/old/workers/T-11111111' },
+      ],
+    },
+  };
+  const count = await sweepEphemeralSessions(ctx);
+  assert.equal(count, 2);
+  assert.deepEqual(archived.sort(), ['s-orphan-worker', 's-subagent']);
 });

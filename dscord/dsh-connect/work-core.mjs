@@ -47,6 +47,35 @@ const targetOf = args => {
 };
 const ended = task => ['done', 'failed', 'cancelled', 'unknown'].includes(task?.status);
 const shortId = () => `T-${randomUUID().slice(0, 8)}`;
+const WORKER_CWD_RE = /(?:^|[\\/])workers[\\/]T-[0-9a-f]+(?:$|[\\/])/i;
+
+/**
+ * Host-wide sweep: archive every finished ephemeral worker session (cwd under `workers/T-*`,
+ * including historical/orphan nodes) and finished native subagent session (`parentSessionId`).
+ * Without `{ stopActivity: true }`, DSH automatically refuses still-running sessions.
+ */
+export async function sweepEphemeralSessions(ctx) {
+  const registry = ctx?.workspaceRegistry || ctx?.get?.('workspaceRegistry');
+  const query = ctx?.sessionQuery || ctx?.get?.('sessionQuery');
+  if (typeof registry?.archiveSession !== 'function' || typeof query?.listSessions !== 'function') return 0;
+  const archivedSet = new Set(Array.isArray(registry.archivedSessionIds) ? registry.archivedSessionIds : []);
+  const sessions = await query.listSessions().catch(() => []);
+  let count = 0;
+  for (const s of sessions) {
+    const id = s?.id || s?.sessionId;
+    if (!id || archivedSet.has(id)) continue;
+    const cwd = String(s?.cwd || '');
+    const isWorker = WORKER_CWD_RE.test(cwd);
+    const isSubagent = Boolean(s?.parentSessionId);
+    if (!isWorker && !isSubagent) continue;
+    try {
+      await registry.archiveSession(id);
+      archivedSet.add(id);
+      count += 1;
+    } catch { /* still running or already archived */ }
+  }
+  return count;
+}
 // DSH registers compiled definitions: defineTool turns the field specs into an
 // object JSON Schema. Loaded lazily because the SDK resolves through the host
 // runtime only after the native team has started.

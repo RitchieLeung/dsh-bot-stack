@@ -5,6 +5,7 @@ import { DshModels } from './models.mjs';
 import { NativeBots } from './native-bots.mjs';
 import { NativeConnections } from './native-connections.mjs';
 import { startNativeTeam } from './native-team.mjs';
+import { sweepEphemeralSessions } from './work-core.mjs';
 
 export const name = 'dscord-connect';
 export const inject = ['connection', 'profileContext', 'llm', 'settings', 'credentials', 'sessionController', 'sessions', 'tools', 'systemPrompt', 'sessionTitle', 'workspaceRegistry'];
@@ -35,6 +36,8 @@ export async function apply(ctx, config = {}) {
   }), 'dscord: connection API');
   ctx.effect(() => () => controller.dispose(), 'dscord: owned Bot processes');
   await ready;
+  void sweepEphemeralSessions(ctx).catch(() => {});
   const timer = setInterval(() => void controller.synchronizeNative().catch(() => {}), 10000);
-  ctx.effect(() => () => clearInterval(timer), 'dscord: native roster discovery');
+  const sweepTimer = setInterval(() => void sweepEphemeralSessions(ctx).catch(() => {}), 60000);
+  ctx.effect(() => () => { clearInterval(timer); clearInterval(sweepTimer); }, 'dscord: native roster discovery');
 }
