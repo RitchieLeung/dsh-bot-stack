@@ -16,7 +16,8 @@ test('tools.js omits MAIN_ONLY_TOOLS for non-main Bots and masks redundant DSH n
     const listeners = new Map();
     const servedBase = [
       'bash', 'read', 'write', 'edit', 'glob', 'grep', 'web_fetch', 'read_image',
-      'spawn_teammate', 'wait_agent', 'team_task_update', 'issue_get', 'issue_update',
+      'spawn_teammate', 'wait_agent', 'team_task_update',
+      'issue_get', 'issue_update', 'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',
     ];
     const ctx = {
       on(event, fn) {
@@ -102,16 +103,19 @@ test('tools.js omits MAIN_ONLY_TOOLS for non-main Bots and masks redundant DSH n
     }
     assert.equal(cli.denied.has('issue_get'), false, 'local CLI bot keeps issue_get');
     assert.equal(cli.denied.has('issue_update'), false, 'local CLI bot keeps issue_update');
+    for (const name of ['issue_create', 'issue_assign', 'issue_link', 'issue_unlink']) {
+      assert.ok(cli.denied.has(name), `non-main bot should mask main-only global tool: ${name}`);
+      assert.equal(main.denied.has(name), false, `main bot should keep ${name}`);
+    }
 
-    // 3. Switching CLI Bot back to a native LLM lifts redundant tool masks automatically
+    // 3. Switching CLI Bot back to a native LLM lifts redundant local-agent masks while keeping main-only masks
     bots['bot-cli'].model = 'deepseek-official/deepseek-flash';
     rt.syncScopedTools();
     for (const fn of listeners.get('tools/change') ?? []) fn();
-    // Simulate agent resolution via system-prompt/assemble or hideBotUnusedTools path
     for (const fn of listeners.get('agent/created') ?? []) {
       await fn({ agent: cli.agent });
     }
-    assert.equal(cli.denied.size, 0, 'switching back to native model lifts all local-agent tool masks');
+    assert.deepEqual([...cli.denied].sort(), ['issue_assign', 'issue_create', 'issue_link', 'issue_unlink']);
   } finally {
     hooks.deregister();
   }

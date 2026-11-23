@@ -37,6 +37,9 @@ const LOCAL_AGENT_REDUNDANT_TOOLS = new Set([
 // Team management tools whose execute() unconditionally rejects non-Main Bots;
 // omit them from non-Main Bot scopes so their schemas do not bloat every turn.
 const MAIN_ONLY_TOOLS = new Set(['create_bot', 'stop_bot', 'create_group', 'delete_group'])
+// Global plugin tools (e.g. bot-issue management actions) that only Main Bots
+// can execute; restrict them on non-Main Bots so their schemas are not injected.
+const MAIN_ONLY_GLOBAL_TOOLS = new Set(['issue_create', 'issue_assign', 'issue_link', 'issue_unlink'])
 // The guidance DSH writes into the prompt for the hidden tools. Agent Teams makes
 // every root Session a Team Lead and tells it to spawn teammates in `team:policy`;
 // its `team:identity` context is required, so DSH puts it back after any filter.
@@ -779,7 +782,7 @@ export function install(rt) {
     const held = scoped.get(id)
     if (held === undefined) return
     scoped.delete(id)
-    for (const dispose of [...held.disposers, ...(held.connectorLifts ?? []), ...(held.localAgentLifts ?? [])]) {
+    for (const dispose of [...held.disposers, ...(held.connectorLifts ?? []), ...(held.localAgentLifts ?? []), ...(held.mainOnlyLifts ?? [])]) {
       try {
         dispose()
       } catch (error) {
@@ -956,11 +959,32 @@ export function install(rt) {
       } catch { /* scoped names cannot be restricted */ }
     }
   }
+  // Mask global Main-Bot-only tools (e.g. issue_create/assign/link/unlink) on
+  // non-Main Bots so their schemas are never sent to worker/member Bots.
+  const maskMainOnlyGlobalTools = (agent, held) => {
+    if (typeof agent.ctx?.tools?.restrict !== 'function' || typeof ctx.tools?.schemas !== 'function') return
+    const self = rt.botOf(rt.selfOf(agent.session?.id))
+    const isMain = self !== undefined && rt.isMain(self.id)
+    const served = !isMain ? new Set(ctx.tools.schemas(agent).map(schema => schema.name)) : new Set()
+    const deny = !isMain ? [...served].filter(name => MAIN_ONLY_GLOBAL_TOOLS.has(name)) : []
+    const before = held.mainOnlyDenied ?? new Set()
+    if (deny.length === before.size && deny.every(name => before.has(name))) return
+    for (const lift of held.mainOnlyLifts ?? []) { try { lift() } catch { /* already lifted */ } }
+    held.mainOnlyLifts = []
+    held.mainOnlyDenied = new Set(deny)
+    for (const name of deny) {
+      try {
+        const lift = agent.ctx.tools.restrict({ deny: [name] })
+        if (typeof lift === 'function') held.mainOnlyLifts.push(lift)
+      } catch { /* scoped names cannot be restricted */ }
+    }
+  }
   const reapplyToolMasks = () => {
     for (const held of scoped.values()) {
       if (held.agent === undefined) continue
       try { maskConnectorTools(held.agent, held) } catch (error) { rt.warn('ds-bot: connector mask failed: %s', error) }
       try { maskLocalAgentRedundantTools(held.agent, held) } catch (error) { rt.warn('ds-bot: local-agent tool mask failed: %s', error) }
+      try { maskMainOnlyGlobalTools(held.agent, held) } catch (error) { rt.warn('ds-bot: main-only tool mask failed: %s', error) }
     }
   }
 
@@ -1024,6 +1048,7 @@ export function install(rt) {
     }
     maskConnectorTools(agent, held)
     maskLocalAgentRedundantTools(agent, held)
+    maskMainOnlyGlobalTools(agent, held)
   }
   ctx.on('tools/change', () => reapplyToolMasks())
   // A new Bot, part, or group Session gets its Agent before ds-bot records it, so the

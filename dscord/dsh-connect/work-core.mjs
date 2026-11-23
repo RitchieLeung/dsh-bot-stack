@@ -33,6 +33,11 @@ export const WORKER_DENY = new Set([
   'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note',
   // 工作者可读事务、评论并推进到待验收；建单、指派和改依赖仍归主 Bot。
   'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',
+  // 工作者不再套娃拉起 DSH 子 agent / 团队任务 / 目标，专注完成当前任务。
+  'subagent', 'subagent_fork', 'subagent_codex', 'subagent_claude_code', 'list_subagent_models',
+  'send_message', 'interrupt_agent', 'list_agents', 'workflow', 'ralph',
+  'spawn_teammate', 'wait_agent', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
+  'create_goal', 'update_goal', 'get_goal',
 ]);
 // Desktop cards: in DSCord nobody sees them, and a turn that ends on one has no reply to send (script 02 G16).
 export const CARD_TOOLS = new Set(['ask_user', 'ask_user_question', 'show_view']);
@@ -364,6 +369,13 @@ export class WorkCore {
     }
     mark(task, 'running', 'core', { model: appliedRef || wantedModel || null });
     for (const def of await compileTools(this.workerTools(task))) agent.ctx.tools.register(def);
+    // Restrict denied & card tools on the worker session so their schemas are
+    // stripped from request/header.tools instead of only failing at guard() time.
+    const workerServed = (this.ctx.tools?.schemas?.(agent) || agent.ctx.tools.schemas?.(agent) || []).map(tool => tool.name);
+    for (const name of workerServed) {
+      if (!WORKER_DENY.has(name) && !CARD_TOOLS.has(name)) continue;
+      try { agent.ctx.tools.restrict?.({ deny: [name] }); } catch { /* guarded fallback */ }
+    }
     this.timers.set(task.id, setTimeout(() => void this.timeout(task.id), this.timeoutMs));
     await this.prompt(sessionId, this.briefText(task));
   }
