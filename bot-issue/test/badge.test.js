@@ -11,8 +11,8 @@ const to = source.indexOf('function Icon');
 assert.ok(from > 0 && to > from, 'client.js 里找不到未读角标实现片段');
 
 const factory = new Function(`${source.slice(from, to)}
-return { unreadOf, markSeen };`);
-const { unreadOf, markSeen } = factory();
+return { unreadOf, unreadSummary, markSeen };`);
+const { unreadOf, unreadSummary, markSeen } = factory();
 
 test('unreadOf 统计 version 大于已读的条数', () => {
   const versions = [{ id: 'a', version: 3 }, { id: 'b', version: 1 }];
@@ -41,14 +41,14 @@ function runtime({ versions, serverSeen = {}, legacy = {}, failSeen = false }) {
     if (action === 'meta') return { versions, seen: serverSeen };
     if (action === 'seen') {
       if (failSeen) throw new Error('老后端没有 seen action');
-      if (payload.seen) serverSeen = { ...payload.seen };
+      if (payload.seen) serverSeen = { ...serverSeen, ...payload.seen };
       else serverSeen = { ...serverSeen, [payload.id]: payload.version };
       return { seen: serverSeen };
     }
     throw new Error(`未知 action ${action}`);
   };
   const factory = new Function('call', 'localStorage', `${source.slice(from, to)}
-  return { refreshUnread, markIssueSeen, unreadStore };`);
+  return { refreshUnread, markIssueSeen, markAllSeen, unreadStore };`);
   return { ...factory(call, localStorage), calls, storage };
 }
 
@@ -226,4 +226,31 @@ test('通知支持暂停/恢复，且在非安全上下文中安全降级', asyn
   const insecure = notifyRuntime({ permission: 'granted', isSecureContext: false });
   assert.equal(insecure.notifyState.status, 'insecure');
   assert.equal(await insecure.toggleNotify(), 'insecure');
+});
+
+test('unreadSummary 按状态与紧急程度分组统计未读，markAllSeen 一键清空全部未读', async () => {
+  const versions = [
+    { id: 'a', status: 'dispatched', priority: 'P2', version: 3 },
+    { id: 'b', status: 'dispatched', priority: 'P0', version: 2 },
+    { id: 'c', status: 'in_review', priority: 'P1', version: 4 },
+    { id: 'd', status: 'done', priority: 'P2', version: 1 },
+  ];
+  const summary = unreadSummary(versions, { b: 2, d: 1 });
+  assert.equal(summary.count, 2);
+  assert.deepEqual([...summary.ids].sort(), ['a', 'c']);
+  assert.deepEqual(summary.byStatus, { dispatched: 1, in_review: 1 });
+  assert.deepEqual(summary.byStatusPriority, { dispatched: { P2: 1 }, in_review: { P1: 1 } });
+
+  const rt = runtime({ versions, serverSeen: { b: 2, d: 1 } });
+  await rt.refreshUnread();
+  assert.equal(rt.unreadStore.count, 2);
+  assert.equal(rt.unreadStore.byStatus.dispatched, 1);
+  assert.equal(rt.unreadStore.byStatus.in_review, 1);
+  assert.equal(rt.unreadStore.ids.has('a'), true);
+  assert.equal(rt.unreadStore.ids.has('b'), false);
+
+  await rt.markAllSeen();
+  assert.equal(rt.unreadStore.count, 0);
+  assert.deepEqual(rt.unreadStore.byStatus, {});
+  assert.equal(rt.unreadStore.ids.size, 0);
 });

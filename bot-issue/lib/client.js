@@ -55,20 +55,32 @@ window.__ModuleLoader__.load({
 .is-filter{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:transparent;color:var(--dsw-alias-label-primary);padding:7px 8px;border-radius:8px;cursor:pointer;font-size:13px}
 .is-filter:hover{background:var(--dsw-alias-bg-layer-2)}
 .is-filter[data-active="true"]{background:var(--dsw-alias-bg-layer-2);font-weight:600}
+.is-filter[data-unread="true"]{font-weight:600}
 .is-filter-dot{width:7px;height:7px;border-radius:50%;flex:none}
-.is-filter-count{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:999px;padding:0 7px;line-height:18px;font-variant-numeric:tabular-nums}
+.is-filter-badges{margin-left:auto;display:inline-flex;align-items:center;gap:5px;flex:none}
+.is-filter-unread{min-width:17px;height:17px;padding:0 5px;border-radius:999px;background:var(--dsw-alias-state-error-primary);color:#fff;font-size:10.5px;font-weight:700;line-height:17px;text-align:center;font-variant-numeric:tabular-nums;box-sizing:border-box;box-shadow:0 1px 2px color-mix(in srgb, var(--dsw-alias-state-error-primary) 35%, transparent)}
+.is-filter-count{font-size:11px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:999px;padding:0 7px;line-height:18px;font-variant-numeric:tabular-nums}
 .is-filter[data-active="true"] .is-filter-count{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-foreground, #fff)}
 .is-main{flex:1;min-width:0;display:flex;flex-direction:column}
 .is-head{display:flex;gap:10px;align-items:center;padding:14px 20px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .is-head-title{font-weight:700;font-size:15px}
 .is-head-count{font-size:12px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:1px 9px;line-height:18px}
+.is-head-unread{font-size:11.5px;font-weight:600;color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 11%, transparent);border:1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 26%, transparent);border-radius:999px;padding:1px 9px;line-height:18px;font-variant-numeric:tabular-nums}
+.is-readall-btn{border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-secondary);border-radius:999px;padding:3px 10px;font-size:11.5px;font-family:inherit;cursor:pointer;white-space:nowrap;transition:border-color .1s,color .1s,background-color .1s}
+.is-readall-btn:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
+.is-readall-btn:disabled{opacity:.45;cursor:default}
 .is-body{flex:1;overflow:auto;padding:16px 20px 24px}
 .is-card{border:1px solid var(--dsw-alias-border-l1);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-1);cursor:pointer;transition:border-color .12s,box-shadow .12s,transform .12s}
+.is-card[data-unread="true"]{border-color:color-mix(in srgb, var(--dsw-alias-state-error-primary) 28%, var(--dsw-alias-border-l1));border-left:3px solid var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 4%, var(--dsw-alias-bg-layer-1))}
 .is-card:hover{border-color:var(--dsw-alias-border-l2);box-shadow:0 4px 14px color-mix(in srgb, #000 8%, transparent);transform:translateY(-1px)}
-.is-card-top{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--dsw-alias-label-secondary);margin-bottom:6px}
+.is-card[data-unread="true"]:hover{border-left-color:var(--dsw-alias-state-error-primary)}
+.is-card-top{display:flex;gap:8px;align-items:center;font-size:11px;color:var(--dsw-alias-label-secondary);margin-bottom:6px;flex-wrap:wrap}
+.is-card-unread-pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;padding:1px 7px;font-size:10.5px;font-weight:700;line-height:16px;color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent);white-space:nowrap}
+.is-card-unread-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-error-primary);flex:none}
 .is-card-id{font-variant-numeric:tabular-nums}
 .is-card-time{margin-left:auto}
 .is-card-title{font-weight:600;font-size:13.5px;line-height:1.4}
+.is-card[data-unread="true"] .is-card-title{font-weight:700}
 .is-card-body{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:4px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .is-badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;line-height:1.6;white-space:nowrap;background:color-mix(in srgb, var(--sc) 12%, transparent);color:var(--sc)}
 .is-badge-dot{width:6px;height:6px;border-radius:50%;background:var(--sc);flex:none}
@@ -223,10 +235,12 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 .is-prio-bar-label{font-size:11.5px;color:var(--dsw-alias-label-secondary);margin-right:4px}
 .is-prio-pick{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .is-prio-lock{font-size:11.5px;color:var(--dsw-alias-label-secondary);cursor:help}
-.is-prio-chip{border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-secondary);border-radius:999px;padding:2px 10px;font-size:11.5px;font-family:inherit;cursor:pointer;line-height:18px}
+.is-prio-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-secondary);border-radius:999px;padding:2px 10px;font-size:11.5px;font-family:inherit;cursor:pointer;line-height:18px}
 .is-prio-chip:hover{border-color:var(--pc, var(--dsw-alias-brand-primary));color:var(--pc, var(--dsw-alias-brand-primary))}
 .is-prio-chip[data-active="true"]{border-color:var(--pc, var(--dsw-alias-brand-primary));background:color-mix(in srgb, var(--pc, var(--dsw-alias-brand-primary)) 14%, transparent);color:var(--pc, var(--dsw-alias-brand-primary));font-weight:600}
 .is-prio-chip[data-prio="P0"][data-active="true"]{background:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary);color:#fff}
+.is-prio-unread{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-error-primary);flex:none}
+.is-prio-chip[data-prio="P0"][data-active="true"] .is-prio-unread{background:rgba(255,255,255,.95)}
 .is-back{border:0;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;padding:4px 6px;border-radius:6px;display:inline-flex;align-items:center;gap:2px}
 .is-back:hover{color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}
 .is-actions{margin:14px 0 0;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1);display:flex;flex-wrap:wrap;gap:8px}
@@ -1300,8 +1314,25 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
     // ---- 未读角标与浏览器桌面通知（badge.test.js 从这里截取）----
     const UNREAD_KEY = 'bot-issue:seen';
     const NOTIFY_MUTE_KEY = 'bot-issue:notify-muted';
+    function unreadSummary(versions, seen) {
+      const ids = new Set();
+      const byStatus = {};
+      const byStatusPriority = {};
+      for (const v of (versions || [])) {
+        if (!v || !v.id) continue;
+        if ((v.version || 0) <= ((seen && seen[v.id]) || 0)) continue;
+        ids.add(v.id);
+        if (v.status) {
+          byStatus[v.status] = (byStatus[v.status] || 0) + 1;
+          const prio = v.priority || 'P2';
+          if (!byStatusPriority[v.status]) byStatusPriority[v.status] = {};
+          byStatusPriority[v.status][prio] = (byStatusPriority[v.status][prio] || 0) + 1;
+        }
+      }
+      return { count: ids.size, ids, byStatus, byStatusPriority };
+    }
     function unreadOf(versions, seen) {
-      return (versions || []).filter(v => (v.version || 0) > ((seen && seen[v.id]) || 0)).length;
+      return unreadSummary(versions, seen).count;
     }
     function markSeen(seen, id, version) {
       const next = Object.assign({}, seen || {});
@@ -1416,8 +1447,25 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       }
     }
 
-    const unreadStore = { count: 0, listeners: new Set() };
-    const setUnread = count => { if (unreadStore.count === count) return; unreadStore.count = count; for (const fn of unreadStore.listeners) fn(count); };
+    const unreadStore = {
+      count: 0,
+      ids: new Set(),
+      byStatus: {},
+      byStatusPriority: {},
+      versions: [],
+      seen: {},
+      listeners: new Set(),
+    };
+    const setUnreadSnapshot = (versions, seen) => {
+      const next = unreadSummary(versions, seen);
+      unreadStore.count = next.count;
+      unreadStore.ids = next.ids;
+      unreadStore.byStatus = next.byStatus;
+      unreadStore.byStatusPriority = next.byStatusPriority;
+      unreadStore.versions = Array.isArray(versions) ? versions : [];
+      unreadStore.seen = seen && typeof seen === 'object' ? seen : {};
+      for (const fn of unreadStore.listeners) fn(unreadStore.count, unreadStore);
+    };
     let seenMigrated = false;
     const applyMetaSnapshot = async (meta) => {
       syncNotifyState();
@@ -1431,7 +1479,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
           try { serverSeen = (await call('seen', { seen: legacy })).seen; } catch { /* 老后端不支持时走本地兜底 */ }
         }
       }
-      setUnread(unreadOf(meta.versions, serverSeen || readSeen()));
+      setUnreadSnapshot(meta.versions, serverSeen || readSeen());
     };
     const refreshUnread = async () => {
       try {
@@ -1447,6 +1495,22 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
         try { localStorage.setItem(UNREAD_KEY, JSON.stringify(markSeen(readSeen(), issue.id, issue.version))); } catch { /* ignore */ }
       }
       refreshUnread();
+    };
+    const markAllSeen = async () => {
+      const patch = {};
+      for (const v of (unreadStore.versions || [])) {
+        if (!v || !v.id) continue;
+        if (unreadStore.ids.has(v.id)) patch[v.id] = v.version || 0;
+      }
+      if (!Object.keys(patch).length) return;
+      try {
+        await call('seen', { seen: patch });
+      } catch {
+        let local = readSeen();
+        for (const [id, ver] of Object.entries(patch)) local = markSeen(local, id, ver);
+        try { localStorage.setItem(UNREAD_KEY, JSON.stringify(local)); } catch { /* ignore */ }
+      }
+      await refreshUnread();
     };
 
     function Icon({ size }) {
@@ -1839,6 +1903,24 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
       const [note, setNote] = React.useState(null);
       const [roster, setRoster] = React.useState([]);
       const [navOpen, setNavOpen] = React.useState(false); // 手机：状态筛选抽屉
+      const [markingAll, setMarkingAll] = React.useState(false);
+      const [unread, setUnread] = React.useState(() => ({
+        count: unreadStore.count,
+        ids: unreadStore.ids,
+        byStatus: unreadStore.byStatus,
+        byStatusPriority: unreadStore.byStatusPriority,
+      }));
+
+      React.useEffect(() => {
+        const fn = (_count, store) => setUnread({
+          count: store.count,
+          ids: store.ids,
+          byStatus: store.byStatus,
+          byStatusPriority: store.byStatusPriority,
+        });
+        unreadStore.listeners.add(fn);
+        return () => unreadStore.listeners.delete(fn);
+      }, []);
 
       // 聊天里点 #N（或点浏览器待验收/回复通知）→ 打开对应事务。
       React.useEffect(() => {
@@ -1920,41 +2002,84 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
         onOpenIssue: number => { setDetailId(String(number)); refresh(); },
       });
 
+      const handleMarkAllSeen = async () => {
+        if (markingAll || !unread.count) return;
+        setMarkingAll(true);
+        try {
+          await markAllSeen();
+          setNote('已全部标为已读');
+        } finally {
+          setMarkingAll(false);
+        }
+      };
+
       const filters = statuses || ['open', 'discussing', 'dispatched', 'in_review', 'done', 'failed', 'cancelled'];
+      const statusUnread = unread.byStatus[filter] || 0;
+      const prioUnreadMap = unread.byStatusPriority[filter] || {};
+      const sortedItems = items.length
+        ? [...items.filter(it => unread.ids.has(it.id)), ...items.filter(it => !unread.ids.has(it.id))]
+        : [];
       return h('div', { className: 'is-root' },
         h('div', { className: 'is-side', 'data-open': String(navOpen) },
           h('button', { className: 'is-new', type: 'button', onClick: () => { setNavOpen(false); setView('new'); } },
             h('span', null, '＋'), h('span', null, '新建事务')),
           h('div', { className: 'is-side-title' }, '状态'),
-          filters.map(s => h('button', { key: s, type: 'button', className: 'is-filter', 'data-active': String(s === filter), onClick: () => { setFilter(s); setNavOpen(false); } },
+          filters.map(s => {
+            const u = unread.byStatus[s] || 0;
+            return h('button', {
+              key: s,
+              type: 'button',
+              className: 'is-filter',
+              'data-active': String(s === filter),
+              'data-unread': String(u > 0),
+              onClick: () => { setFilter(s); setNavOpen(false); },
+            },
             h('span', { className: 'is-filter-dot', style: { background: statusColor(s) } }),
             h('span', null, STATUS_LABEL[s] || s),
-            h('span', { className: 'is-filter-count' }, String(counts[s] || 0))))),
+            h('span', { className: 'is-filter-badges' },
+              u > 0 ? h('span', { className: 'is-filter-unread', title: `${u} 条未读` }, u > 99 ? '99+' : String(u)) : null,
+              h('span', { className: 'is-filter-count', title: `共 ${counts[s] || 0} 条` }, String(counts[s] || 0))));
+          })),
         navOpen ? h('div', { className: 'is-scrim', onClick: () => setNavOpen(false) }) : null,
         h('div', { className: 'is-main' },
           h('div', { className: 'is-head' },
             h('button', { className: 'is-nav-btn', type: 'button', onClick: () => setNavOpen(open => !open), 'aria-label': '筛选状态' }, '☰'),
             h('span', { className: 'is-head-title' }, STATUS_LABEL[filter] || filter),
             h('span', { className: 'is-head-count' }, `${items.length} 条`),
+            statusUnread > 0 ? h('span', { className: 'is-head-unread' }, `${statusUnread} 条未读`) : null,
             h('div', { className: 'is-head-right' },
               note ? h('span', { className: 'is-note' }, note) : null,
+              unread.count > 0 ? h('button', {
+                type: 'button',
+                className: 'is-readall-btn',
+                disabled: markingAll,
+                title: `将全部 ${unread.count} 条未读事务标为已读`,
+                onClick: handleMarkAllSeen,
+              }, markingAll ? '处理中…' : '全部已读') : null,
               h(NotifyButton, { onNotice: setNote }))),
           h('div', { className: 'is-prio-bar' },
             h('span', { className: 'is-prio-bar-label' }, '紧急程度'),
-            ['all', ...PRIORITIES].map(p => h('button', {
-              key: p,
-              type: 'button',
-              className: 'is-prio-chip',
-              'data-prio': p,
-              'data-active': String(priorityFilter === p),
-              style: p === 'all' ? undefined : { '--pc': PRIORITY_META[p].color },
-              onClick: () => setPriorityFilter(p),
-            }, p === 'all' ? '全部' : `${p} ${PRIORITY_META[p].desc}`))),
+            ['all', ...PRIORITIES].map(p => {
+              const pu = p === 'all' ? statusUnread : (prioUnreadMap[p] || 0);
+              return h('button', {
+                key: p,
+                type: 'button',
+                className: 'is-prio-chip',
+                'data-prio': p,
+                'data-active': String(priorityFilter === p),
+                style: p === 'all' ? undefined : { '--pc': PRIORITY_META[p].color },
+                onClick: () => setPriorityFilter(p),
+              },
+              p === 'all' ? '全部' : `${p} ${PRIORITY_META[p].desc}`,
+              p !== 'all' && pu > 0 ? h('span', { className: 'is-prio-unread', title: `${pu} 条未读` }) : null);
+            })),
           h('div', { className: 'is-body' },
-            items.length ? items.map(issue => {
+            sortedItems.length ? sortedItems.map(issue => {
               const canStart = issue.status === 'open' || issue.status === 'discussing';
-              return h('div', { key: issue.id, className: 'is-card', onClick: () => { setDetailId(issue.id); setView('detail'); } },
+              const isUnread = unread.ids.has(issue.id);
+              return h('div', { key: issue.id, className: 'is-card', 'data-unread': String(isUnread), onClick: () => { setDetailId(issue.id); setView('detail'); } },
                 h('div', { className: 'is-card-top' },
+                  isUnread ? h('span', { className: 'is-card-unread-pill' }, h('span', { className: 'is-card-unread-dot' }), '未读') : null,
                   h(Badge, { status: issue.status }),
                   h(PriorityBadge, { priority: issue.priority || 'P2' }),
                   (issue.tags || []).map(tag => h('span', { key: tag, className: 'is-type-tag' }, tag)),
