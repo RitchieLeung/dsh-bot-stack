@@ -786,6 +786,21 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     }
     const row = requireIssue(id);
     if (terminal) {
+      // 单个 worker 被取消或因宿主重启中断（cancelled / unknown）不应把整个事务关单
+      // （常见于改派时旧执行人取消 worker），也不得冒用当前最新执行人的名字落款。
+      if (status === 'cancelled' || status === 'unknown') {
+        const noteBody = status === 'cancelled'
+          ? `工作者任务 ${taskId} 已取消（不影响事务当前状态）。`
+          : `工作者任务 ${taskId} 因宿主重启中断，结果不确定。`;
+        comment(id, {
+          body: noteBody,
+          authorKind: 'system',
+          authorName: '',
+          authorSessionId: null,
+          kind: 'status',
+        });
+        return getFull(id);
+      }
       // A worker session has no Bot identity of its own; the result belongs to the
       // issue's assignee, so the timeline still shows who did the work.
       const handler = typeof workerName === 'string' && workerName.trim()

@@ -560,12 +560,28 @@ export function apply(ctx, config = {}) {
     const attachmentsSection = attachments.length
       ? `\n\n附件本地路径（read_image 读取）：\n${attachments.map(a => `- ${a.path}（${a.name}）`).join('\n')}`
       : '';
+    // 提取讨论阶段已参与或已签字确认的非主 Bot 同事，避免主 Bot 忽略上下文归属机械按负载改派。
+    const fullIssue = store().get(issue.id);
+    const contextPeers = new Set();
+    for (const a of (fullIssue.consensus?.agreed || [])) {
+      if (a.kind === 'agent' && a.name && a.name !== mainBot.name) contextPeers.add(a.name);
+    }
+    for (const c of (fullIssue.comments || [])) {
+      if (c.authorKind === 'agent' && c.authorName && c.authorName !== mainBot.name && c.authorName !== 'Bot') {
+        contextPeers.add(c.authorName);
+      }
+    }
+    const peerList = [...contextPeers];
+    const contextLine = peerList.length
+      ? `\n\n已参与前期讨论/具备上下文的同事：${peerList.join('、')}（优先由已参与讨论的同事承接落地，不要因纯负载为 0 机械改派给毫无上下文的同事）`
+      : '';
     const text = formatSystemReminder(
       [
         '[事务派工事件] 请主 Bot 按 `issue-workflow` 规则自主调度并完成指派登记。',
+        '- 选人优先级：已参与讨论/自带上下文的同事 > 专才匹配 > 在办负载均衡；勿机械按负载忽略用户拉进讨论群的同事。',
         needVision
           ? '- 本事务包含图片，选定执行人时需确认其模型具备读图能力；转交时附带下列本机附件路径。'
-          : '- 结合成员专长与当前负载独立选定执行人，勿混淆团队交接与工作者派工路径。',
+          : '- 结合上下文归属、成员专长与当前负载选定执行人，勿混淆团队交接与工作者派工路径。',
       ],
       [
         `事务：${label}（${issue.id}）「${issue.title}」`,
@@ -573,7 +589,7 @@ export function apply(ctx, config = {}) {
         '',
         '同事在办负载：',
         loadTable,
-      ].join('\n') + attachmentsSection + `\n\n正文：\n${issue.body || '（无正文）'}`,
+      ].join('\n') + contextLine + attachmentsSection + `\n\n正文：\n${issue.body || '（无正文）'}`,
     );
 
     try {
@@ -1095,10 +1111,14 @@ export function apply(ctx, config = {}) {
       workerNameOf: nameOf,
       // A worker finished: the issue moved to 待验收 on its own, so somebody has to
       // look. The main Bot owns verification, so ping it (the worker is not a Bot).
-      onSettle: ({ issueId }) => {
+      onSettle: ({ issueId, status }) => {
+        if (status !== 'done' && status !== 'failed') return;
         try {
           const full = store().get(issueId);
-          void notifyCounterpart(full, full?.assignee?.sessionId || null, '工作者已交回结果，已转入待验收');
+          const msg = status === 'done'
+            ? '工作者已交回结果，已转入待验收'
+            : '工作者任务执行失败，请查看原因并决定重试或改派';
+          void notifyCounterpart(full, full?.assignee?.sessionId || null, msg);
         } catch { /* best effort */ }
       },
     });

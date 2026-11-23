@@ -981,3 +981,20 @@ test('discussing→dispatched enforces consensus gate (user-only by default, mul
   assert.ok(cleared.comments.some(c => c.body === '临时讨论群已自动销毁'));
   store.close();
 });
+
+test('syncTask cancelled/unknown does NOT cancel the issue or blame the new assignee', () => {
+  const store = fresh();
+  const issue = store.create({ title: '改派防误杀测试' });
+  store.update(issue.id, { status: 'dispatched', note: '先派给怡丹' }, { kind: 'user' });
+  store.assign(issue.id, { sessionId: 's-yidan', name: '怡丹' }, { kind: 'user' });
+  store.syncTask(issue.id, { taskId: 'T-old', workerSessionId: 'w-1', status: 'running' });
+
+  // 改派给真莹后，怡丹取消自己的旧 worker T-old
+  store.assign(issue.id, { sessionId: 's-zhenying', name: '真莹' }, { kind: 'user' });
+  const after = store.syncTask(issue.id, { taskId: 'T-old', workerSessionId: 'w-1', status: 'cancelled', resultText: '任务已取消。' });
+  assert.equal(after.status, 'dispatched', '旧 worker 取消绝不能把整个事务关成已取消');
+  const note = after.comments.at(-1);
+  assert.equal(note.authorKind, 'system', '不能冒用当前执行人真莹的名字落款');
+  assert.match(note.body, /T-old.*已取消/);
+  store.close();
+});
