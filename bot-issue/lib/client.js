@@ -15,14 +15,15 @@ window.__ModuleLoader__.load({
 
     const STATUS_LABEL = {
       open: '待处理', discussing: '讨论中', dispatched: '进行中',
-      in_review: '待验收', done: '已闭环', failed: '失败', cancelled: '已取消',
+      in_review: '待验收', rejected: '验收不通过', done: '已闭环', failed: '失败', cancelled: '已取消',
     };
-    // 每个状态一种主题色；in_review 用实心强调（它需要人动作）。
+    // 每个状态一种主题色；in_review 与 rejected 用实心强调（分别代表待验收与严重拒审）。
     const STATUS_META = {
       open: { color: 'var(--dsw-alias-state-idle-primary)', solid: false },
       discussing: { color: 'var(--dsw-alias-brand-primary)', solid: false },
       dispatched: { color: 'var(--dsw-alias-state-warn-primary)', solid: false },
       in_review: { color: 'var(--dsw-alias-state-warn-primary)', solid: true },
+      rejected: { color: 'var(--dsw-alias-state-error-primary)', solid: true },
       done: { color: 'var(--dsw-alias-state-success-primary)', solid: false },
       failed: { color: 'var(--dsw-alias-state-error-primary)', solid: false },
       cancelled: { color: 'var(--dsw-alias-state-idle-primary)', solid: false },
@@ -37,9 +38,10 @@ window.__ModuleLoader__.load({
     // Actions available from each status. start = 派工（走 dispatch_work 桥接）。
     const ACTIONS = {
       open: [['start', '启动'], ['discussing', '标记讨论'], ['cancelled', '取消']],
-      discussing: [['start', '启动'], ['open', '回待处理'], ['cancelled', '取消']],
-      dispatched: [['start', '重派'], ['open', '打回待处理'], ['cancelled', '取消']],
-      in_review: [['done', '验收通过'], ['reject', '打回重做'], ['cancelled', '取消']],
+      discussing: [['start', '启动'], ['open', '退回待处理'], ['cancelled', '取消']],
+      dispatched: [['start', '重派'], ['rejected', '验收不通过'], ['open', '退回待处理'], ['cancelled', '取消']],
+      in_review: [['done', '验收通过'], ['rejected', '验收不通过'], ['cancelled', '取消']],
+      rejected: [['start', '重新派工'], ['open', '退回待处理'], ['cancelled', '取消']],
       done: [['open', '重开']],
       failed: [['open', '重试'], ['cancelled', '取消']],
       cancelled: [['open', '重开']],
@@ -327,11 +329,11 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 
     function actionKind(status) {
       if (status === 'start' || status === 'done') return 'primary';
-      if (status === 'cancelled' || status === 'reject') return 'danger';
+      if (status === 'cancelled' || status === 'reject' || status === 'rejected') return 'danger';
       return 'secondary';
     }
 
-    const KIND_LABEL = { status: '状态', result: '结果', reject: '打回', assign: '指派' };
+    const KIND_LABEL = { status: '状态', result: '结果', reject: '验收不通过', assign: '指派' };
 
     // ---- 时间线配色（timeline.test.js 从这里截取）----
     const SYSTEM_COLOR = '#64748b';
@@ -403,7 +405,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 
     // 历史状态评论存的是变量名（dispatched → in_review），显示时翻成人话。
     // 新写入的评论已经在 host 侧写中文，这里只是给老数据兜底。
-    const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|done|failed|cancelled)\b/g;
+    const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|rejected|done|failed|cancelled)\b/g;
     function localizeStatusText(text) {
       if (typeof text !== 'string' || !text) return text;
       return text
@@ -1108,7 +1110,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
 
     /** 依赖选择器：打 #编号或标题关键词，回车/点击挂上前一条。 */
     /** 还在流转中的状态；`done/failed/cancelled` 算收尾（闭环/结束）。 */
-    const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review'];
+    const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'rejected'];
 
     /**
      * 依赖候选过滤。
@@ -1153,10 +1155,11 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
      */
     const REVIEW_META = {
       done: { title: '验收通过', placeholder: '填写验收意见…', inputTitle: '提交后写入闭环结果', emptyErr: '验收必须写意见', btn: '确认验收', btnKind: 'primary' },
-      reject: { title: '打回重做', placeholder: '填写打回原因…', inputTitle: '提交后写入时间线并通知经办人', emptyErr: '打回必须写意见', btn: '确认打回', btnKind: 'danger' },
+      rejected: { title: '验收不通过', placeholder: '填写验收不通过的原因与整改要求…', inputTitle: '提交后标记为验收不通过，写入时间线并通知经办人', emptyErr: '验收不通过必须填写原因与整改要求', btn: '确认不通过', btnKind: 'danger' },
+      reject: { title: '验收不通过', placeholder: '填写验收不通过的原因与整改要求…', inputTitle: '提交后标记为验收不通过，写入时间线并通知经办人', emptyErr: '验收不通过必须填写原因与整改要求', btn: '确认不通过', btnKind: 'danger' },
       cancelled: { title: '取消事务', placeholder: '填写取消原因或处理意见…', inputTitle: '提交后写入时间线并取消事务', emptyErr: '取消必须写处理意见', btn: '确认取消', btnKind: 'danger' },
       discussing: { title: '标记讨论中', placeholder: '填写讨论焦点或处理意见…', inputTitle: '提交后写入时间线并标记为讨论中', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
-      open: { title: '转回待处理', placeholder: '填写重开或退回待处理的原因…', inputTitle: '提交后写入时间线并转回待处理', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
+      open: { title: '退回待处理', placeholder: '填写重开或退回待处理的原因…', inputTitle: '提交后写入时间线并退回待处理', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
       dispatched: { title: '转入进行中', placeholder: '填写处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认流转', btnKind: 'primary' },
       in_review: { title: '提交待验收', placeholder: '填写交付结论或处理意见…', inputTitle: '提交后写入时间线并转待验收', emptyErr: '必须填写处理意见', btn: '确认提交', btnKind: 'primary' },
       failed: { title: '标记失败', placeholder: '填写失败原因或处理意见…', inputTitle: '提交后写入时间线', emptyErr: '必须填写处理意见', btn: '确认标记', btnKind: 'danger' },
@@ -1553,9 +1556,9 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
         if (kind === 'done') {
           await call('update', { id, status: 'done', result: opinion, note: opinion, authorKind: 'user' });
           setNote('已验收通过，意见已写入闭环结果');
-        } else if (kind === 'reject') {
-          await call('update', { id, status: 'dispatched', rejection: opinion, note: opinion, authorKind: 'user' });
-          setNote('已打回重做，意见已写入时间线并知会经办人');
+        } else if (kind === 'rejected' || kind === 'reject') {
+          await call('update', { id, status: 'rejected', rejection: opinion, note: opinion, authorKind: 'user' });
+          setNote('已标记验收不通过，意见已写入时间线并知会经办人');
         } else {
           await call('update', { id, status: kind, note: opinion, authorKind: 'user' });
           setNote(`已更新为「${STATUS_LABEL[kind] || kind}」，处理意见已写入时间线`);
@@ -1920,7 +1923,7 @@ button:has(.is-unread):not(:has(> span + span)) .is-unread{right:3px;top:1px;tra
         onOpenIssue: number => { setDetailId(String(number)); refresh(); },
       });
 
-      const filters = statuses || ['open', 'discussing', 'dispatched', 'in_review', 'done', 'failed', 'cancelled'];
+      const filters = statuses || ['open', 'discussing', 'dispatched', 'in_review', 'rejected', 'done', 'failed', 'cancelled'];
       return h('div', { className: 'is-root' },
         h('div', { className: 'is-side', 'data-open': String(navOpen) },
           h('button', { className: 'is-new', type: 'button', onClick: () => { setNavOpen(false); setView('new'); } },

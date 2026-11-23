@@ -104,12 +104,14 @@ export function createIssueHandler({ store, start, mainBot = null, notify = null
           rejection: typeof body.rejection === 'string' ? body.rejection : undefined,
           expectedVersion: typeof body.expectedVersion === 'number' ? body.expectedVersion : undefined,
         }, author);
-        // 状态推进要知会对侧：打回/验收/交结果时，通知执行人或主 Bot（面板这次之前漏了）。
-        if (typeof notify === 'function' && body.status !== undefined && ['dispatched', 'in_review', 'done', 'failed'].includes(issue.status)) {
-          const opinionText = [body.note, body.opinion, body.result].find(v => typeof v === 'string' && v.trim())?.trim();
-          const summary = typeof body.rejection === 'string' && body.rejection.trim()
-            ? `被打回重做：${body.rejection.trim()}`
-            : `状态变更为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`;
+        // 状态推进要知会对侧：验收不通过/打回/验收/交结果时，通知执行人或主 Bot（面板这次之前漏了）。
+        if (typeof notify === 'function' && body.status !== undefined && ['dispatched', 'in_review', 'rejected', 'done', 'failed'].includes(issue.status)) {
+          const opinionText = [body.rejection, body.note, body.opinion, body.result].find(v => typeof v === 'string' && v.trim())?.trim() || '';
+          const summary = issue.status === 'rejected'
+            ? `验收不通过：${opinionText}`
+            : (typeof body.rejection === 'string' && body.rejection.trim()
+              ? `被打回重做：${body.rejection.trim()}`
+              : `状态变更为「${STATUS_LABELS[issue.status] || issue.status}」${opinionText ? `：${opinionText}` : ''}`);
           try { await notify(issue, { body: summary, statusChange: true }, null); } catch { /* best-effort */ }
         }
         return { ok: true, value: { issue } };

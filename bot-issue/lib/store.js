@@ -12,7 +12,7 @@ import path, { dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-export const STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'done', 'failed', 'cancelled'];
+export const STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'rejected', 'done', 'failed', 'cancelled'];
 export const EDITABLE_PRIORITY_STATUSES = new Set(['open', 'discussing']);
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 export const DEFAULT_PRIORITY = 'P2';
@@ -35,6 +35,7 @@ export const STATUS_LABELS = {
   discussing: '讨论中',
   dispatched: '进行中',
   in_review: '待验收',
+  rejected: '验收不通过',
   done: '已闭环',
   failed: '失败',
   cancelled: '已取消',
@@ -42,7 +43,7 @@ export const STATUS_LABELS = {
 /** Label of a status, falling back to the raw id for unknown values. */
 export const statusLabel = status => STATUS_LABELS[status] || String(status || '');
 /** Status ids as whole words, for rewriting raw ids inside old comment text. */
-const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|done|failed|cancelled)\b/g;
+const STATUS_WORD_RE = /\b(open|discussing|dispatched|in_review|rejected|done|failed|cancelled)\b/g;
 
 /** A label is a short free-text name; longer input is truncated, not rejected. */
 const TAG_MAX_LEN = 40;
@@ -70,7 +71,7 @@ export function normalizeTags(input) {
 function issueRef(row) {
   return row.number ? `#${row.number}「${row.title}」` : `「${row.title}」`;
 }
-export const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review'];
+export const ACTIVE_STATUSES = ['open', 'discussing', 'dispatched', 'in_review', 'rejected'];
 export const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
 
 // Who may move where. A dispatched issue is owned by its worker until it reports
@@ -78,8 +79,9 @@ export const TERMINAL_STATUSES = ['done', 'failed', 'cancelled'];
 const TRANSITIONS = {
   open: new Set(['discussing', 'dispatched', 'cancelled']),
   discussing: new Set(['open', 'dispatched', 'cancelled']),
-  dispatched: new Set(['in_review', 'failed', 'cancelled', 'open']),
-  in_review: new Set(['done', 'dispatched', 'open', 'cancelled']),
+  dispatched: new Set(['in_review', 'rejected', 'failed', 'cancelled', 'open']),
+  in_review: new Set(['done', 'rejected', 'dispatched', 'open', 'cancelled']),
+  rejected: new Set(['dispatched', 'open', 'discussing', 'cancelled']),
   done: new Set(['open']),
   failed: new Set(['open', 'cancelled']),
   cancelled: new Set(['open']),
@@ -505,22 +507,21 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       throw failure('VERSION_CONFLICT', `issue 已被改动（v${row.version}），请重新读取后再写`);
     }
     // 闭环（in_review→done）只有用户能点：主 Bot 的终点是「待验收」，验收通过由人把关。
-    // 打回重做（in_review→dispatched）主 Bot 或用户都能做——主 Bot 测试不通过时打回。
+    // 验收不通过（→rejected 或 in_review→dispatched）主 Bot 或用户都能做——拒审时必须写原因。
+    const isRejection = next !== from && (next === 'rejected' || (from === 'in_review' && next === 'dispatched'));
     if (next !== from && from === 'in_review' && next === 'done' && actor.kind !== 'user') {
       throw failure('FORBIDDEN_TRANSITION', '只有用户能「已闭环」；主 Bot 推进到「待验收」即视为交验，请用户验收');
     }
-    if (next !== from && from === 'in_review' && next === 'dispatched' && !(actor.kind === 'user' || actor.isMain === true)) {
+    if (isRejection && !(actor.kind === 'user' || actor.isMain === true)) {
       throw failure('FORBIDDEN_TRANSITION', `只有主 Bot 或用户能「${statusLabel(next)}」（当前是「${statusLabel(from)}」）`);
     }
     const rawOpinion = [patch.note, patch.opinion, patch.rejection, patch.result]
       .find(val => typeof val === 'string' && val.trim());
     const opinion = rawOpinion ? rawOpinion.trim() : '';
-    // 打回必须带打回意见，意见会写进时间线（kind='reject'），让经办人知道哪里要重做。
-    if (next !== from && from === 'in_review' && next === 'dispatched') {
-      const rejectionText = typeof patch.rejection === 'string' && patch.rejection.trim() ? patch.rejection.trim() : opinion;
-      if (!rejectionText) {
-        throw failure('REJECTION_REQUIRED', '打回必须写打回意见');
-      }
+    const rejectionText = typeof patch.rejection === 'string' && patch.rejection.trim() ? patch.rejection.trim() : opinion;
+    // 验收不通过/打回必须带原因，意见会写进时间线（kind='reject'），让经办人知道哪里要整改。
+    if (isRejection && !rejectionText) {
+      throw failure('REJECTION_REQUIRED', '验收不通过必须填写原因与整改要求');
     }
     // Completing an issue is gated on its dependencies AND its children: a parent
     // can't be done while a sub-issue is still open.
@@ -540,7 +541,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
       }
     }
     // 其余所有状态流转（取消、交验、重开、转讨论、转进行中、标记失败等）也必须填写处理意见（内部 system 派工桥接除外）。
-    if (next !== from && next !== 'done' && !(from === 'in_review' && next === 'dispatched') && actor.kind !== 'system') {
+    if (next !== from && next !== 'done' && !isRejection && actor.kind !== 'system') {
       if (!opinion) {
         throw failure('OPINION_REQUIRED', `状态流转（${statusLabel(from)} → ${statusLabel(next)}）必须填写处理意见`);
       }
@@ -573,8 +574,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const updated = { ...issueFrom(selectIssue.get(id)), tags: nextTags ?? tagsOf(id) };
     if (next !== from) {
       insertComment.run(id, actor.kind || 'system', actor.name || '', null, `状态：${statusLabel(from)} → ${statusLabel(next)}`, 'status', null, now());
-      if (from === 'in_review' && next === 'dispatched') {
-        const rejectionText = typeof patch.rejection === 'string' && patch.rejection.trim() ? patch.rejection.trim() : opinion;
+      if (isRejection) {
         insertComment.run(id, actor.kind || 'system', actor.name || '', null, rejectionText, 'reject', null, now());
       } else if (next !== 'done' && opinion) {
         const commentKind = next === 'in_review' ? 'result' : 'comment';
@@ -759,7 +759,7 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
     const map = {};
     for (const row of db.prepare(`
       SELECT assigneeSessionId AS sid, COUNT(*) AS n FROM issues
-      WHERE assigneeSessionId IS NOT NULL AND status IN ('dispatched', 'in_review')
+      WHERE assigneeSessionId IS NOT NULL AND status IN ('dispatched', 'in_review', 'rejected')
       GROUP BY assigneeSessionId`).all()) {
       map[row.sid] = row.n;
     }

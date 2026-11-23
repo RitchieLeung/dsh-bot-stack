@@ -912,3 +912,30 @@ test('all status transitions require a non-empty processing opinion and record i
   assert.equal(store.get(issue.id).status, 'open');
   store.close();
 });
+
+test('rejected (验收不通过) is a dedicated active status requiring rejection opinion, restricted to user/main, and allows re-dispatch', () => {
+  const { store, id } = toInReview();
+  assert.ok(STATUSES.includes('rejected'));
+  // 非主 Bot/用户不能标记验收不通过
+  assert.throws(
+    () => store.update(id, { status: 'rejected', rejection: '不通过' }, { kind: 'agent', name: '伟峰', isMain: false }),
+    err => err.code === 'FORBIDDEN_TRANSITION',
+  );
+  // 不写原因被拒绝
+  assert.throws(
+    () => store.update(id, { status: 'rejected' }, { kind: 'user' }),
+    err => err.code === 'REJECTION_REQUIRED',
+  );
+  // 写明原因进入 rejected 状态并记录 reject 评论，且仍计入执行人负载
+  const rejected = store.update(id, { status: 'rejected', rejection: '接口返回缺少分页字段，请整改' }, { kind: 'user', name: '用户' });
+  assert.equal(rejected.status, 'rejected');
+  const full = store.get(id);
+  assert.ok(full.comments.some(c => c.kind === 'status' && c.body === '状态：待验收 → 验收不通过'));
+  assert.ok(full.comments.some(c => c.kind === 'reject' && c.body === '接口返回缺少分页字段，请整改'));
+  assert.equal(store.loads()['s-1'], 1);
+
+  // 可从 rejected 重新进入进行中或退回待处理
+  const redone = store.update(id, { status: 'dispatched', note: '已重新安排整改' }, { kind: 'agent', name: '小欣', isMain: true });
+  assert.equal(redone.status, 'dispatched');
+  store.close();
+});
