@@ -494,7 +494,13 @@ export class WorkCore {
       }
     }
     const task = this.workerTask(session.id);
-    if (!task) return false;
+    if (!task) {
+      if (event.type === 'turn/end') {
+        const doneTask = this.tasks().find(item => item.sessionId === session.id && ended(item) && !item.archived);
+        if (doneTask) void this.archiveWorkerSession(doneTask);
+      }
+      return false;
+    }
     if (event.type === 'turn/start') task.busy = true;
     if (event.type === 'user/message' && /^前台(?:补充|答复)：/.test(textOf(event.data?.message || event.data)) && task.unread > 0) task.unread--;
     if (event.type === 'assistant/message') { const text = textOf(event.data?.message); if (text) task.lastText = text.slice(-2000); }
@@ -528,7 +534,24 @@ export class WorkCore {
     for (const key of ['doing', 'waiting', 'unread', 'busy']) delete task[key];
     await this.save();
     if (notify) await this.notify(task, { kind: 'result' });
+    void this.archiveWorkerSession(task);
     await this.pump();
+  }
+
+  /** Archive a finished worker's ephemeral DSH session so it does not clutter the sidebar. */
+  async archiveWorkerSession(task) {
+    if (!task?.sessionId || task.archived) return false;
+    const registry = this.ctx.workspaceRegistry || this.ctx.get?.('workspaceRegistry');
+    if (typeof registry?.archiveSession !== 'function') return false;
+    try {
+      await registry.archiveSession(task.sessionId);
+      task.archived = true;
+      await this.save();
+      return true;
+    } catch {
+      // May still be wrapping up its final turn (WorkspaceActiveSessionError); turn/end or next flush will retry.
+      return false;
+    }
   }
 
   async notify(task, message) {
@@ -583,7 +606,10 @@ export class WorkCore {
   /** Results that finished while no Bot node was listening (or before a restart). */
   async flush() {
     const pending = task => (task.notifiedOrigins ?? (task.notified ? 1 : 0)) < 1 + (task.followers?.length || 0);
-    for (const task of this.tasks()) if (ended(task) && pending(task)) await this.notify(task, { kind: 'result' });
+    for (const task of this.tasks()) {
+      if (ended(task) && pending(task)) await this.notify(task, { kind: 'result' });
+      if (ended(task) && task.sessionId && !task.archived) await this.archiveWorkerSession(task);
+    }
   }
 
   /** Live front busy state and background worker capacity snapshot, used for load-balanced routing. */

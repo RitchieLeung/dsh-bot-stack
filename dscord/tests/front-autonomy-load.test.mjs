@@ -301,3 +301,50 @@ test('prompts instruct task-size autonomy and load-balanced routing', () => {
   const rendered = promptSection.text({ agent: { id: 'chat-yidan' } });
   assert.match(rendered, /load[- ]balanc|idle|busy/i);
 });
+
+test('WorkCore archives finished worker sessions on finish, turn/end retry, and flush()', async () => {
+  const archived = [];
+  let failOnce = true;
+  const ctx = {
+    workspaceRegistry: {
+      archiveSession: async (sid) => {
+        if (sid === 'w-retry' && failOnce) {
+          failOnce = false;
+          throw new Error('WorkspaceActiveSessionError');
+        }
+        archived.push(sid);
+      },
+    },
+  };
+  const state = {
+    tasks: {
+      'T-old': { id: 'T-old', title: '历史已结束', status: 'done', sessionId: 'w-old', notified: true },
+      'T-retry': { id: 'T-retry', title: '完成时还在收尾', status: 'running', sessionId: 'w-retry', origin: { direct: true } },
+    },
+  };
+  const core = new WorkCore({
+    ctx,
+    native: { bot: async () => ({ name: '小欣' }) },
+    node: { id: '@xiaoxin:local', nativeBotId: 'bot-xiaoxin', directory: '/tmp' },
+    state,
+    save: async () => {},
+  });
+  // Restore T-retry to running (constructor marks in-flight tasks unknown on restart)
+  state.tasks['T-retry'].status = 'running';
+
+  // 1. flush() sweeps historical ended worker sessions
+  await core.flush();
+  assert.ok(archived.includes('w-old'), 'flush() should archive ended historical worker session');
+  assert.equal(state.tasks['T-old'].archived, true);
+
+  // 2. finish() tries archive; if active (throws), turn/end retries and succeeds
+  await core.finish(state.tasks['T-retry'], { status: 'done', summary: 'ok' }, { notify: false });
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(state.tasks['T-retry'].archived, undefined);
+  await core.event({ id: 'w-retry' }, { type: 'turn/end', data: {} });
+  await new Promise(r => setTimeout(r, 10));
+  assert.ok(archived.includes('w-retry'), 'turn/end should retry and archive finished worker session');
+  assert.equal(state.tasks['T-retry'].archived, true);
+
+  core.dispose();
+});
