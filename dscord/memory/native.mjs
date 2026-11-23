@@ -40,7 +40,11 @@ Use replaceId from recall for corrections to one fact. Distinct concurrent claim
 Tools and native tasks continue normally. Memory summaries are pointers to records, not a second editable fact store.`;
 const REVIEW = `Maintain this Bot's durable source-aware memories. Return ONLY JSON {"changes":[...]} (empty if nothing durable).
 Read source bodies as statements by their authorId, NOT by one universal user. Each change: {op:"add"|"replace"|"forget",text,subjectId,predicate,kind:"stated"|"reported"|"observation"|"inference",saidBy,sourceIds:[exact source id],scope:"own"|"team"|"room:<exact room ID>",replaceId?,validUntil?,claimState?:"statement"|"proposal"|"confirmed"|"uncertain",facets?:["preference"|"decision"|"relationship"|"question"|"commitment"|"experience"],entityIds?:[exact person IDs],projectIds?:[exact project IDs],basisRefs?:[{id:existing memory ID,revision:exact revision}]}.
-Use exact identity IDs from the input; for project facts use the room identity or an explicitly named project. Use short stable predicates for one attribute. Save durable facts, decisions, preferences, assignments and corrections. Skip transient chatter, questions, test instructions and mere acknowledgements.
+Use exact identity IDs from the input; for project facts use the room identity or an explicitly named project. Use short stable predicates for one attribute. Save ONLY durable cross-task knowledge that will still matter next week: stable user preferences/red-lines, user corrections/lessons learned, lasting project/environment facts (repos, ports, architecture decisions), and long-term roles/commitments.
+STRICT EXCLUSIONS — return {"changes":[]} instead of saving any of these:
+- Process chatter & dispatch logs (e.g. "已派工 T-xxxx", "任务已取消/转待验收", "正在等回复", "已通知某人").
+- One-off experiment/debug telemetry (single-run GPU memory/timing, PIDs, frame indices/bounding boxes/hashes, temp directory file listings, transient log excerpts) — those belong in issue comments, never durable memory.
+- Transient chatter, questions, test instructions and mere acknowledgements.
 Direct statements are stated; quotes/relays are reported with saidBy identifying who actually said it, and subjectId who it concerns. Bot interpretations are inference. Tool results are observation from tool:<name>, never statements by the human who requested the task. Save a tool result only when it is durable task evidence the user asked to keep. A Bot relay is never a new direct human statement. Keep originRefs and source IDs; never count repeats as independent evidence.
 Default scope to the source room, own for native personal chat. Stable personal communication preferences stated as usual/general behavior belong in own unless the person limits them to a room or task; a one-time request or mood is not a permanent preference. Use team only when explicitly shared team-wide. Different room values can coexist.
 Human statements seen in room history keep their own author and event. Saving or reading a generated draft only proves the file operation; it does not confirm the draft's venue details, decisions or proposals. Classify unsupported derived claims as inference, and retain explicit unknowns/corrections instead of reviving an earlier draft's unsupported assertion.
@@ -248,10 +252,25 @@ export function installNativeMemory(rt) {
     const batchLimit = Number.isInteger(calibrated) && calibrated >= 1 && calibrated <= 8 ? calibrated : 8;
     const pending = memory.reviewableRefs(botId).slice(0, batchLimit);
     if (!pending.length || disposed) return false;
+    // Skip raw tool-output sources during automatic background review: tool logs
+    // stay queryable via raw_source_query/memory_source, but auto-extracting every
+    // tool call floods durable memory with transient PIDs/metrics/dispatch chatter.
+    const toolRefs = [];
+    const conversationalRefs = [];
+    for (const ref of pending) {
+      const src = store.source(ref.id, ref.revision);
+      if (src?.authorKind === 'tool') toolRefs.push(ref);
+      else conversationalRefs.push(ref);
+    }
+    if (toolRefs.length) {
+      for (const ref of toolRefs) store.setMeta(`reviewed:${botId}:${ref.id}:${ref.revision}`, true);
+      store.setMeta(`unreviewed:${botId}`, (store.getMeta(`unreviewed:${botId}`) || []).filter(ref => !toolRefs.some(old => old.id === ref.id && old.revision === ref.revision)));
+      if (!conversationalRefs.length) return true;
+    }
     const bot = rt.botOf(botId); if (!bot) return false;
     const agent = await waitForReview(rt.resolveAgent(rt.chatOf(botId)), signal);
     ensureReview(); await waitForReview(agent.whenIdle(), signal); ensureReview();
-    const { refs, value: { sources, changes, known } } = await prepareReviewBatch({ refs: pending,
+    const { refs, value: { sources, changes, known } } = await prepareReviewBatch({ refs: conversationalRefs,
       onOutputLimit: ({ error, attempted, next }) => {
         ensureReview();
         store.setMeta(`review-batch-limit:${botId}`, next.length);
