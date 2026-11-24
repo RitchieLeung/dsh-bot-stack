@@ -29045,24 +29045,32 @@ body[data-ds-dark-theme] .dscord-connect {
         if (!res.ok || !data?.ok) throw new Error(data?.error?.message || `请求失败 (${res.status})`);
         return data.value;
       }, []);
+      const loadStateWithModels = React.useCallback(async () => {
+        let v = await callKernel('state', {});
+        if (!Array.isArray(v?.models) || v.models.length === 0) {
+          await callKernel('models', {}).catch(() => {});
+          v = await callKernel('state', {});
+        }
+        return v || {};
+      }, [callKernel]);
       const reloadKernel = React.useCallback(async () => {
-        const v = await callKernel('state', {});
-        setKernel(v || {});
+        const v = await loadStateWithModels();
+        setKernel(v);
         const p = v?.prefs || {};
         setMountDraft(Array.isArray(p.workerMountDirs) ? p.workerMountDirs.join('\n') : '');
         setSopDraft(typeof p.workerSop === 'string' ? p.workerSop : '');
-      }, [callKernel]);
+      }, [loadStateWithModels]);
       React.useEffect(() => {
         let alive = true;
-        void callKernel('state', {}).then(v => {
+        void loadStateWithModels().then(v => {
           if (!alive) return;
-          setKernel(v || {});
+          setKernel(v);
           const p = v?.prefs || {};
           setMountDraft(Array.isArray(p.workerMountDirs) ? p.workerMountDirs.join('\n') : '');
           setSopDraft(typeof p.workerSop === 'string' ? p.workerSop : '');
         }).catch(() => {});
         return () => { alive = false; };
-      }, [callKernel]);
+      }, [loadStateWithModels]);
       const saveField = async (patch) => {
         setSaving(true); setErr(''); setMsg('');
         try {
@@ -29091,7 +29099,7 @@ body[data-ds-dark-theme] .dscord-connect {
         { key: 'frontMaxToolCalls', label: '前台单轮执行工具上限', defVal: 6, min: 0, max: 50, unit: '次', hint: '超限强制派子 agent（dispatch_work）；0 不限' },
         { key: 'recallMaxChars', label: '单次 recall 返回上限', defVal: 12000, min: 2000, max: 60000, unit: '字符', hint: '默认 12000，防单次记忆召回灌爆上下文' },
       ];
-      const selectStyle = { padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 12.5, maxWidth: 230 };
+      const selectStyle = { padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 12.5, minWidth: 190, maxWidth: 260 };
       const textAreaStyle = { width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', boxSizing: 'border-box' };
       return h(React.Fragment, null,
         h('section', { className: 'dc-panel', 'aria-label': '上下文与预算' },
@@ -29127,24 +29135,28 @@ body[data-ds-dark-theme] .dscord-connect {
               const curFront = bot.model || '';
               const curWorker = bot.workerModel || '';
               const frontLegacyLocal = isLocalRef(curFront);
-              return h('div', { key: bot.id, style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18))' } },
-                h('span', { style: { width: 88, fontSize: 13, fontWeight: 600 } }, bot.name || bot.id),
-                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+              const frontInList = !curFront || frontLegacyLocal || nativeModels.some(m => m.ref === curFront);
+              const workerInList = !curWorker || allModels.some(m => m.ref === curWorker);
+              return h('div', { key: bot.id, style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18))' } },
+                h('span', { style: { width: 72, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' } }, bot.name || bot.id),
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' } },
                   h('span', { style: { opacity: 0.7 } }, '前台'),
                   h('select', {
                     value: curFront, disabled: saving, style: selectStyle,
                     onChange: (e) => void saveBotModel(bot.id, { model: e.target.value || null }),
                   },
                     frontLegacyLocal ? h('option', { value: curFront }, `${curFront}（旧本地CLI，建议切原生）`) : null,
+                    !frontInList ? h('option', { value: curFront }, curFront) : null,
                     !curFront ? h('option', { value: '' }, '默认原生模型') : null,
                     nativeModels.map(m => h('option', { key: m.ref, value: m.ref }, m.name ? `${m.name} (${m.ref})` : m.ref)))),
-                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' } },
                   h('span', { style: { opacity: 0.7 } }, '后台 Worker'),
                   h('select', {
                     value: curWorker, disabled: saving, style: selectStyle,
                     onChange: (e) => void saveBotModel(bot.id, { workerModel: e.target.value || null }),
                   },
                     h('option', { value: '' }, '跟随前台模型'),
+                    !workerInList ? h('option', { value: curWorker }, curWorker) : null,
                     allModels.map(m => h('option', { key: m.ref, value: m.ref }, m.name ? `${m.name} (${m.ref})` : m.ref)))));
             }))),
         h('section', { className: 'dc-panel', 'aria-label': '全局工作者挂载路径与 SOP' },
