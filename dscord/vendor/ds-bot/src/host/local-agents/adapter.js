@@ -166,6 +166,12 @@ export class LocalAgentAdapter extends LlmAdapter {
     return live
   }
 
+  async compactSession(sessionId) {
+    const live = this.live.get(String(sessionId))
+    if (!live || live.dead || typeof live.engine?.compact !== 'function') return false
+    return maybeAutoCompact(live, this.deps.rt, { force: true })
+  }
+
   async closeLive(live, { idle = false } = {}) {
     if (live.dead) return
     live.dead = true

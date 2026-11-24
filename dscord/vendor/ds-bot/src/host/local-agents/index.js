@@ -230,6 +230,7 @@ export function install(rt) {
 
   Object.assign(rt, {
     isLocalAgentRoute, isLocalAgentRef, localAgentOf, isLocalAgentSession,
+    compactLocalAgent: sessionId => adapter.compactSession(sessionId),
     localAgentRoutes: allRoutes, localAgentsEndpoint,
     localAgentBadge: (ref) => {
       const provider = splitRef(ref)?.provider

@@ -42,13 +42,14 @@ export function trackFrontLocalExec(live, rt) {
   return 'counted'
 }
 
-export async function maybeAutoCompact(live, rt, { now = Date.now(), cooldownMs = COMPACT_COOLDOWN_MS } = {}) {
+export async function maybeAutoCompact(live, rt, { now = Date.now(), cooldownMs = COMPACT_COOLDOWN_MS, force = false } = {}) {
   if (live.dead || live.compacting || typeof live.engine?.compact !== 'function') return false
   const tokens = live.lastPromptTokens || 0
-  if (tokens <= 0) return false
   const threshold = resolveLocalCompactThreshold(live, rt?.state?.prefs)
-  if (tokens < threshold) return false
-  if (now - (live.lastCompactAt || 0) < cooldownMs) return false
+  if (!force) {
+    if (tokens <= 0 || tokens < threshold) return false
+    if (now - (live.lastCompactAt || 0) < cooldownMs) return false
+  }
   live.compacting = true
   live.lastCompactAt = now
   const run = (async () => {

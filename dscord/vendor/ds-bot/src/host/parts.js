@@ -332,9 +332,21 @@ export function install(rt) {
       if (ownedByBot(target)) return Promise.resolve(null)
       return original.compactIfNeeded.call(this, target, trigger, signal)
     }
-    engine.compactNow = function compactNowOutsideBots(target, signal, commandId) {
-      if (ownedByBot(target)) return refuseCompaction()
-      return original.compactNow.call(this, target, signal, commandId)
+    engine.compactNow = async function compactNowOutsideBots(target, signal, commandId) {
+      if (!ownedByBot(target)) return original.compactNow.call(this, target, signal, commandId)
+      const sessionId = target.session.id
+      if (rt.isLocalAgentSession?.(sessionId)) {
+        const ok = await rt.compactLocalAgent?.(sessionId)
+        if (!ok) throw new Error('当前本地 CLI 会话尚未启动或不支持手动压缩（请先发一条消息激活会话后再 /compact）。')
+        return null
+      }
+      const result = await condenseRange(target, () => original.compactNow.call(this, target, signal, commandId))
+      if (result !== null) {
+        rt.renewMemory(sessionId)
+        const after = tokensOf(target.session)
+        if (after !== undefined) partBase.set(sessionId, after)
+      }
+      return result
     }
     engine.compactRegion = function compactRegionOutsideBots(start, end, target, signal) {
       if (!ownedByBot(target)) return original.compactRegion.call(this, start, end, target, signal)
