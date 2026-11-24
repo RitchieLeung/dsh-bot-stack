@@ -145,11 +145,15 @@ export function install(rt) {
     return holdName('bot', cleanName, () => buildBot(cleanName, options))
   }
 
-  async function buildBot(cleanName, { role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, effort, workDir, copyOf, pickModel = false, owner, source, greet = true }) {
+  async function buildBot(cleanName, { role = '', instructions = '', color, brief = '', createdBy, main = false, avatar, model, workerModel, effort, workDir, copyOf, pickModel = false, owner, source, greet = true }) {
     if (owner !== undefined && (typeof owner?.id !== 'string' || owner.id.trim() === '')) throw Object.assign(new Error('A Bot owner needs a stable account ID'), { code: 'bot/invalid' })
     const cleanAvatarValue = cleanAvatar(avatar)
     // The model is fixed at creation, so a later change of the DSH default leaves it alone.
     const modelRef = model ? await rt.resolveModel(model) : pickModel ? undefined : await rt.defaultBotModel()
+    if (modelRef && rt.isLocalAgentRef?.(modelRef)) {
+      throw new Error('前台模型只允许使用 DSH 原生模型，请将 Codex / Claude Code 等本地 Agent 配置到「后台 Worker 模型（workerModel）」。')
+    }
+    const workerModelRef = workerModel ? await rt.resolveModel(workerModel) : undefined
     // A thinking level needs a model to resolve against; with none it would be dropped
     // silently, so the create fails before a Session is made.
     if (effort && modelRef === undefined) throw new Error('Pick a model before choosing a thinking level')
@@ -171,6 +175,7 @@ export function install(rt) {
         ...(isColor(currentColor(color)) ? { color: currentColor(color) } : {}),
         ...(cleanAvatarValue ? { avatar: cleanAvatarValue } : {}),
         ...(modelRef ? { model: modelRef } : {}),
+        ...(workerModelRef ? { workerModel: workerModelRef } : {}),
         ...(effortId ? { effort: effortId } : {}),
         ...(dir ? { workDir: dir } : {}),
         instructions: String(instructions).trim(),
@@ -341,6 +346,12 @@ export function install(rt) {
     const modelRef = patch.model === undefined ? undefined
       : patch.model === null || patch.model === '' ? null
       : await rt.resolveModel(patch.model)
+    if (modelRef && rt.isLocalAgentRef?.(modelRef)) {
+      throw new Error('前台模型只允许使用 DSH 原生模型，请将 Codex / Claude Code 等本地 Agent 配置到「后台 Worker 模型（workerModel）」。')
+    }
+    const workerModelRef = patch.workerModel === undefined ? undefined
+      : patch.workerModel === null || patch.workerModel === '' ? null
+      : await rt.resolveModel(patch.workerModel)
     // A new level resolves against the model the Bot will run on: the new one, the
     // model it keeps, or — the model cleared — the one it last ran on.
     const effortRef = modelRef === undefined ? bot.model ?? bot.appliedModel : modelRef ?? bot.appliedModel
@@ -386,6 +397,10 @@ export function install(rt) {
       if (modelRef === null) delete bot.model
       else bot.model = modelRef
       modelChanged = true
+    }
+    if (patch.workerModel !== undefined) {
+      if (workerModelRef === null) delete bot.workerModel
+      else bot.workerModel = workerModelRef
     }
     if (patch.effort !== undefined) {
       if (effortId === null) delete bot.effort

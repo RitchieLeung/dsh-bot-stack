@@ -34,12 +34,18 @@ const LOCAL_AGENT_REDUNDANT_TOOLS = new Set([
   'web_fetch', 'web_search', 'read_image', 'todo_write', 'todo_read', 'notebook_edit',
   ...HIDDEN_TOOLS,
 ])
-// Team management tools whose execute() unconditionally rejects non-Main Bots;
-// omit them from non-Main Bot scopes so their schemas do not bloat every turn.
-const MAIN_ONLY_TOOLS = new Set(['create_bot', 'stop_bot', 'create_group', 'delete_group'])
-// Global plugin tools (e.g. bot-issue management actions) that only Main Bots
-// can execute; restrict them on non-Main Bots so their schemas are not injected.
-const MAIN_ONLY_GLOBAL_TOOLS = new Set(['issue_create', 'issue_assign', 'issue_link', 'issue_unlink'])
+// Team management & broadcast tools reserved for Main Bots; omit them from
+// non-Main Bot scopes so executor Bots stay focused and save schema tokens.
+const MAIN_ONLY_TOOLS = new Set([
+  'create_bot', 'update_bot', 'stop_bot',
+  'create_group', 'update_group', 'delete_group', 'group_goal', 'post_to_group',
+])
+// Global plugin tools (bot-issue management & schedules) that only Main Bots
+// should hold; restrict them on non-Main Bots so their schemas are not injected.
+const MAIN_ONLY_GLOBAL_TOOLS = new Set([
+  'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',
+  'schedule_create', 'schedule_edit',
+])
 // The guidance DSH writes into the prompt for the hidden tools. Agent Teams makes
 // every root Session a Team Lead and tells it to spawn teammates in `team:policy`;
 // its `team:identity` context is required, so DSH puts it back after any filter.

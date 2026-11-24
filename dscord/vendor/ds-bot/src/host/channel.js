@@ -205,6 +205,23 @@ export function install(rt) {
       else if (Number.isInteger(body.recallMaxChars) && body.recallMaxChars >= 2000 && body.recallMaxChars <= 60000) state.prefs.recallMaxChars = body.recallMaxChars
       else throw invalid('Recall max chars must be a whole number from 2000 to 60000')
     }
+    if (body.workerMountDirs !== undefined) {
+      if (body.workerMountDirs === null) {
+        delete state.prefs.workerMountDirs
+      } else {
+        const rawList = Array.isArray(body.workerMountDirs)
+          ? body.workerMountDirs
+          : String(body.workerMountDirs).split(/\r?\n/)
+        const cleaned = [...new Set(rawList.map(s => String(s || '').trim()).filter(Boolean))].slice(0, 20)
+        if (cleaned.length === 0) delete state.prefs.workerMountDirs
+        else state.prefs.workerMountDirs = cleaned
+      }
+    }
+    if (body.workerSop !== undefined) {
+      const text = body.workerSop === null ? '' : String(body.workerSop).trim().slice(0, 8000)
+      if (!text) delete state.prefs.workerSop
+      else state.prefs.workerSop = text
+    }
     return rt.save()
   }
 

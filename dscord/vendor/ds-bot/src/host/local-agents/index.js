@@ -82,6 +82,9 @@ export function install(rt) {
     presetFor: (sessionId) => {
       const bot = rt.botOf(rt.selfOf(sessionId))
       const room = rt.roomOf(rt.groupOwners.get(sessionId)?.roomId)
+      // Ephemeral background workers have no human to click approval prompts;
+      // run them with full-access so mounted repos and git workflows don't stall.
+      if (bot === undefined && room === undefined) return 'full-access'
       return room?.permission ?? bot?.permission ?? 'workspace-write'
     },
     cwdFor: async (sessionId) => {
@@ -95,10 +98,11 @@ export function install(rt) {
     probeCwd: () => mkdtempSync(join(tmpdir(), 'dsb-probe-')),
     toolsFor: (options) => {
       // Only DS Bot's own team tools cross the bridge; the CLI keeps its own.
-      // 事务板（dsh-plugin-bot-issue）的执行人工具也过桥：本地引擎（Codex/Claude/ACP）
-      // 拿不到 DSH 原生的 issue_*，靠 dsbot MCP 桥过去才能参与验收。只桥文本型工具：
-      // read_image 返回图片、桥不过去，这里不放。
+      // 事务板（dsh-plugin-bot-issue）的执行人工具以及工作者汇报工具（work_report / work_ask）
+      // 也过桥：本地引擎（Codex/Claude/ACP）拿不到 DSH 原生工具，靠 dsbot MCP 桥过去才能
+      // 参与事务流转和完成派工交付。只桥文本型工具：read_image 返回图片、桥不过去，这里不放。
       const names = new Set([...rt.teamTools.map(def => def.name), 'approve_agent_action',
+        'work_report', 'work_ask',
         'issue_get', 'issue_list', 'issue_comment', 'issue_update'])
       return (options.tools ?? []).filter(tool => names.has(tool.name))
     },

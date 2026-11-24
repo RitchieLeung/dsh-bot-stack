@@ -29029,10 +29029,12 @@ body[data-ds-dark-theme] .dscord-connect {
     }
 
     function ContextBudgetPanel() {
-      const [prefs, setPrefs] = React.useState(null);
+      const [kernel, setKernel] = React.useState(null);
       const [saving, setSaving] = React.useState(false);
       const [msg, setMsg] = React.useState('');
       const [err, setErr] = React.useState('');
+      const [mountDraft, setMountDraft] = React.useState('');
+      const [sopDraft, setSopDraft] = React.useState('');
       const callKernel = React.useCallback(async (endpoint, payload = {}) => {
         const res = await fetch('/api/dscord/kernel', {
           method: 'POST',
@@ -29043,51 +29045,129 @@ body[data-ds-dark-theme] .dscord-connect {
         if (!res.ok || !data?.ok) throw new Error(data?.error?.message || `请求失败 (${res.status})`);
         return data.value;
       }, []);
+      const reloadKernel = React.useCallback(async () => {
+        const v = await callKernel('state', {});
+        setKernel(v || {});
+        const p = v?.prefs || {};
+        setMountDraft(Array.isArray(p.workerMountDirs) ? p.workerMountDirs.join('\n') : '');
+        setSopDraft(typeof p.workerSop === 'string' ? p.workerSop : '');
+      }, [callKernel]);
       React.useEffect(() => {
         let alive = true;
-        void callKernel('state', {}).then(v => { if (alive) setPrefs(v?.prefs || {}); }).catch(() => {});
+        void callKernel('state', {}).then(v => {
+          if (!alive) return;
+          setKernel(v || {});
+          const p = v?.prefs || {};
+          setMountDraft(Array.isArray(p.workerMountDirs) ? p.workerMountDirs.join('\n') : '');
+          setSopDraft(typeof p.workerSop === 'string' ? p.workerSop : '');
+        }).catch(() => {});
         return () => { alive = false; };
       }, [callKernel]);
       const saveField = async (patch) => {
         setSaving(true); setErr(''); setMsg('');
         try {
           const next = await callKernel('set-prefs', patch);
-          setPrefs(next || {});
+          setKernel(prev => ({ ...(prev || {}), prefs: next || {} }));
           setMsg('已保存并立即生效');
         } catch (e) { setErr(e?.message || String(e)); } finally { setSaving(false); }
       };
-      if (!prefs) return null;
+      const saveBotModel = async (botId, patch) => {
+        setSaving(true); setErr(''); setMsg('');
+        try {
+          await callKernel('update-bot', { id: botId, ...patch });
+          await reloadKernel();
+          setMsg('Bot 模型配置已保存');
+        } catch (e) { setErr(e?.message || String(e)); } finally { setSaving(false); }
+      };
+      if (!kernel) return null;
+      const prefs = kernel.prefs || {};
+      const bots = Array.isArray(kernel.bots) ? kernel.bots : [];
+      const allModels = Array.isArray(kernel.models) ? kernel.models : [];
+      const isLocalRef = ref => typeof ref === 'string' && /^(?:codex-cli|claude-code|acp[-/])/i.test(ref);
+      const nativeModels = allModels.filter(m => !isLocalRef(m.ref));
       const rows = [
         { key: 'compactRatio', label: '自动压缩比例', defVal: 45, min: 20, max: 90, unit: '%', hint: '20–90%，默认 45%' },
         { key: 'compactMaxK', label: '上下文绝对上限', defVal: 120, min: 0, max: 500, unit: 'K tokens', hint: '防 1M 模型膨胀；32–500，0 仅按比例' },
         { key: 'frontMaxToolCalls', label: '前台单轮执行工具上限', defVal: 6, min: 0, max: 50, unit: '次', hint: '超限强制派子 agent（dispatch_work）；0 不限' },
         { key: 'recallMaxChars', label: '单次 recall 返回上限', defVal: 12000, min: 2000, max: 60000, unit: '字符', hint: '默认 12000，防单次记忆召回灌爆上下文' },
       ];
-      return h('section', { className: 'dc-panel', 'aria-label': '上下文与预算' },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
-          h('h2', { style: { margin: 0 } }, '上下文与预算（实时生效）'),
-          msg ? h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-state-success-primary, #16a34a)' } }, msg) : null),
-        err ? h('p', { role: 'alert', className: 'dc-notice dc-error' }, err) : null,
-        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          rows.map(r => {
-            const val = Number.isInteger(prefs[r.key]) ? prefs[r.key] : r.defVal;
-            return h('div', { key: r.key, style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
-              h('span', { style: { width: 168, fontSize: 13, fontWeight: 500 } }, r.label),
-              h('input', {
-                type: 'number', min: r.min, max: r.max, defaultValue: val, key: `${r.key}:${val}`, disabled: saving,
-                style: { width: 88, padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 13, fontVariantNumeric: 'tabular-nums' },
-                onBlur: (e) => {
-                  const num = Number.parseInt(e.target.value.trim(), 10);
-                  if (!Number.isFinite(num) || num === val) return;
-                  let clamped = r.key === 'compactMaxK' ? (num === 0 ? 0 : Math.max(32, Math.min(500, num))) : Math.max(r.min, Math.min(r.max, num));
-                  void saveField({ [r.key]: clamped });
-                },
-                onKeyDown: (e) => { if (e.key === 'Enter') e.currentTarget.blur(); },
-              }),
-              h('span', { style: { fontSize: 12, opacity: 0.72 } }, r.unit),
-              h('span', { style: { fontSize: 11.5, opacity: 0.58 } }, r.hint),
-              val !== r.defVal ? h(Button, { variant: 'outline', type: 'button', disabled: saving, onClick: () => void saveField({ [r.key]: null }) }, '重置') : null);
-          })));
+      const selectStyle = { padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 12.5, maxWidth: 230 };
+      const textAreaStyle = { width: '100%', padding: '6px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 12.5, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', boxSizing: 'border-box' };
+      return h(React.Fragment, null,
+        h('section', { className: 'dc-panel', 'aria-label': '上下文与预算' },
+          h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+            h('h2', { style: { margin: 0 } }, '上下文与预算（实时生效）'),
+            msg ? h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-state-success-primary, #16a34a)' } }, msg) : null),
+          err ? h('p', { role: 'alert', className: 'dc-notice dc-error' }, err) : null,
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+            rows.map(r => {
+              const val = Number.isInteger(prefs[r.key]) ? prefs[r.key] : r.defVal;
+              return h('div', { key: r.key, style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+                h('span', { style: { width: 168, fontSize: 13, fontWeight: 500 } }, r.label),
+                h('input', {
+                  type: 'number', min: r.min, max: r.max, defaultValue: val, key: `${r.key}:${val}`, disabled: saving,
+                  style: { width: 88, padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 13, fontVariantNumeric: 'tabular-nums' },
+                  onBlur: (e) => {
+                    const num = Number.parseInt(e.target.value.trim(), 10);
+                    if (!Number.isFinite(num) || num === val) return;
+                    let clamped = r.key === 'compactMaxK' ? (num === 0 ? 0 : Math.max(32, Math.min(500, num))) : Math.max(r.min, Math.min(r.max, num));
+                    void saveField({ [r.key]: clamped });
+                  },
+                  onKeyDown: (e) => { if (e.key === 'Enter') e.currentTarget.blur(); },
+                }),
+                h('span', { style: { fontSize: 12, opacity: 0.72 } }, r.unit),
+                h('span', { style: { fontSize: 11.5, opacity: 0.58 } }, r.hint),
+                val !== r.defVal ? h(Button, { variant: 'outline', type: 'button', disabled: saving, onClick: () => void saveField({ [r.key]: null }) }, '重置') : null);
+            }))),
+        bots.length > 0 && h('section', { className: 'dc-panel', 'aria-label': '前后台模型分配' },
+          h('h2', { style: { margin: '0 0 6px 0' } }, '前后台模型分配（前台原生 / 后台 Worker 可选任意 Agent）'),
+          h('p', { className: 'dc-muted', style: { margin: '0 0 10px 0', fontSize: 12 } }, '前台只允许原生模型负责接单与调度；后台 Worker 可单独指定 Codex / Claude Code 等外部 Agent。'),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            bots.map(bot => {
+              const curFront = bot.model || '';
+              const curWorker = bot.workerModel || '';
+              const frontLegacyLocal = isLocalRef(curFront);
+              return h('div', { key: bot.id, style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '6px 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.18))' } },
+                h('span', { style: { width: 88, fontSize: 13, fontWeight: 600 } }, bot.name || bot.id),
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+                  h('span', { style: { opacity: 0.7 } }, '前台'),
+                  h('select', {
+                    value: curFront, disabled: saving, style: selectStyle,
+                    onChange: (e) => void saveBotModel(bot.id, { model: e.target.value || null }),
+                  },
+                    frontLegacyLocal ? h('option', { value: curFront }, `${curFront}（旧本地CLI，建议切原生）`) : null,
+                    !curFront ? h('option', { value: '' }, '默认原生模型') : null,
+                    nativeModels.map(m => h('option', { key: m.ref, value: m.ref }, m.name ? `${m.name} (${m.ref})` : m.ref)))),
+                h('label', { style: { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 } },
+                  h('span', { style: { opacity: 0.7 } }, '后台 Worker'),
+                  h('select', {
+                    value: curWorker, disabled: saving, style: selectStyle,
+                    onChange: (e) => void saveBotModel(bot.id, { workerModel: e.target.value || null }),
+                  },
+                    h('option', { value: '' }, '跟随前台模型'),
+                    allModels.map(m => h('option', { key: m.ref, value: m.ref }, m.name ? `${m.name} (${m.ref})` : m.ref)))));
+            }))),
+        h('section', { className: 'dc-panel', 'aria-label': '全局工作者挂载路径与 SOP' },
+          h('h2', { style: { margin: '0 0 6px 0' } }, '全局工作者挂载路径 & 全局 SOP'),
+          h('p', { className: 'dc-muted', style: { margin: '0 0 8px 0', fontSize: 12 } }, '所有后台 Worker 启动时自动注入，避免每个 Bot 重复摸索仓库路径和提交流程。'),
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+            h('label', { style: { fontSize: 12.5, fontWeight: 500 } }, '已授权挂载目录（每行一个绝对路径）'),
+            h('textarea', {
+              rows: 3, value: mountDraft, disabled: saving, style: textAreaStyle,
+              placeholder: '/home/liangliqiang/codes/ai-materials-process\n/home/liangliqiang/codes/ai-materials-model-inference',
+              onChange: (e) => setMountDraft(e.target.value),
+            }),
+            h('label', { style: { fontSize: 12.5, fontWeight: 500 } }, '全局工作者 SOP（仓库分工、分支命名、Draft MR 规范、禁碰服务等）'),
+            h('textarea', {
+              rows: 5, value: sopDraft, disabled: saving, style: textAreaStyle,
+              placeholder: '1. 代码修改均在已授权挂载目录通过独立分支完成并提交 Draft MR；\n2. 严禁重启或 kill 用户正在运行的线上/测试端口；\n3. 完成后必须调用 work_report 汇报结果与证据。',
+              onChange: (e) => setSopDraft(e.target.value),
+            }),
+            h('div', { style: { display: 'flex', justifyContent: 'flex-end' } },
+              h(Button, {
+                variant: 'primary', type: 'button', disabled: saving,
+                onClick: () => void saveField({ workerMountDirs: mountDraft, workerSop: sopDraft }),
+              }, saving ? '保存中…' : '保存挂载路径与 SOP')))));
     }
 
     function ConnectionPage({ connection, t }) {
