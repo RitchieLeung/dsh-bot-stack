@@ -49,8 +49,14 @@ test('CodexEngine marks localExec activities, forwards contextWindow, and suppor
   assert.equal(ev3.usage.cacheReadInputTokens, 120_000);
   assert.equal(ev3.contextWindow, 1_000_000);
 
-  const ok = await engine.compact(thread);
+  const compactPromise = engine.compact(thread);
+  // Simulate Codex completing the Compact turn via turn/completed + thread/compacted
+  await new Promise(r => setImmediate(r));
+  assert.equal(thread.compacting, true);
+  engine.onNotice('turn/completed', { threadId: 'thr-123', turn: { status: 'completed' } });
+  const ok = await compactPromise;
   assert.equal(ok, true);
+  assert.equal(thread.compacting, false);
   assert.deepEqual(rpcCalls, [{ method: 'thread/compact/start', params: { threadId: 'thr-123' } }]);
 });
 

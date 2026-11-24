@@ -70,7 +70,7 @@ export class CodexEngine {
       case 'item/started':
       case 'item/completed': {
         const item = params?.item ?? {}
-        if (thread === undefined) break
+        if (thread === undefined || thread.compacting) break
         if (item.type === 'agentMessage' || item.type === 'agent_message') thread.push({ type: 'text', text: item.text ?? '' })
         else if (item.type === 'reasoning') thread.push({ type: 'thought', text: (item.content ?? []).join('') || item.text || '' })
         else if (method === 'item/completed' && (item.type === 'fileChange' || item.type === 'file_change') && Array.isArray(item.changes)) {
@@ -95,6 +95,10 @@ export class CodexEngine {
       }
       case 'turn/completed': {
         if (thread === undefined) break
+        if (thread.compacting) {
+          thread.compactDone?.()
+          break
+        }
         const turn = params?.turn ?? {}
         if (turn.status === 'failed') thread.push({ type: 'error', error: new Error(turn.error?.message ?? 'the turn failed') })
         else thread.push({ type: 'done', reason: 'stop' })
@@ -110,6 +114,7 @@ export class CodexEngine {
       }
       case 'thread/compacted': {
         if (thread === undefined) break
+        thread.compactDone?.()
         thread.push({ type: 'compacted' })
         break
       }
@@ -188,8 +193,29 @@ export class CodexEngine {
 
   async compact(thread) {
     if (!this.peer || !thread?.threadId) return false
-    await this.peer.request('thread/compact/start', { threadId: thread.threadId }, { timeout: 120_000 })
-    return true
+    if (thread.compacting) return false
+    thread.compacting = true
+    let resolveDone
+    let timer
+    const done = new Promise(resolve => { resolveDone = resolve })
+    thread.compactDone = () => {
+      if (timer) { clearTimeout(timer); timer = undefined }
+      thread.compacting = false
+      thread.compactDone = undefined
+      resolveDone?.()
+    }
+    try {
+      await this.peer.request('thread/compact/start', { threadId: thread.threadId }, { timeout: 120_000 })
+      // Wait for Codex's Compact turn to finish (`thread/compacted` or `turn/completed`)
+      // before allowing any new turn/start so Codex never throws ActiveTurnNotSteerable.
+      await Promise.race([
+        done,
+        new Promise(resolve => { timer = setTimeout(resolve, 90_000); timer.unref?.() }),
+      ])
+      return true
+    } finally {
+      thread.compactDone?.()
+    }
   }
 
   cancel(thread) {

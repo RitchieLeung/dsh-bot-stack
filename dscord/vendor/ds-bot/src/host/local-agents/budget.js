@@ -51,18 +51,23 @@ export async function maybeAutoCompact(live, rt, { now = Date.now(), cooldownMs 
   if (now - (live.lastCompactAt || 0) < cooldownMs) return false
   live.compacting = true
   live.lastCompactAt = now
-  try {
-    const ok = await live.engine.compact(live.engineSession)
-    if (ok !== false) {
-      live.lastPromptTokens = 0
-      rt?.warn?.('ds-bot: local-agent %s auto-compacted at %d tokens (threshold %d)', live.sessionId, tokens, threshold)
-      return true
+  const run = (async () => {
+    try {
+      const ok = await live.engine.compact(live.engineSession)
+      if (ok !== false) {
+        live.lastPromptTokens = 0
+        rt?.warn?.('ds-bot: local-agent %s auto-compacted at %d tokens (threshold %d)', live.sessionId, tokens, threshold)
+        return true
+      }
+      return false
+    } catch (error) {
+      rt?.warn?.('ds-bot: local-agent %s auto-compact failed: %s', live.sessionId, error?.message || error)
+      return false
+    } finally {
+      live.compacting = false
+      if (live.compactPromise === run) live.compactPromise = undefined
     }
-    return false
-  } catch (error) {
-    rt?.warn?.('ds-bot: local-agent %s auto-compact failed: %s', live.sessionId, error?.message || error)
-    return false
-  } finally {
-    live.compacting = false
-  }
+  })()
+  live.compactPromise = run
+  return run
 }

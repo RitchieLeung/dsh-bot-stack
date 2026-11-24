@@ -371,11 +371,20 @@ export class LocalAgentAdapter extends LlmAdapter {
     live.turnLocalExecs = 0
     live.frontLimitWarned = false
     live.frontLimitInterrupted = false
-    try {
-      Promise.resolve(live.engine.prompt(live.engineSession, [{ type: 'text', text }], { signal }))
-        .catch(error => live.push({ type: 'error', error }))
-    } catch (error) {
-      live.push({ type: 'error', error })
+    const dispatch = () => {
+      try {
+        Promise.resolve(live.engine.prompt(live.engineSession, [{ type: 'text', text }], { signal }))
+          .catch(error => live.push({ type: 'error', error }))
+      } catch (error) {
+        live.push({ type: 'error', error })
+      }
+    }
+    if (live.compactPromise) {
+      Promise.resolve(live.compactPromise).catch(() => {}).then(() => {
+        if (!live.dead && !signal?.aborted) dispatch()
+      })
+    } else {
+      dispatch()
     }
   }
 
