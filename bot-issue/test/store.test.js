@@ -998,3 +998,16 @@ test('syncTask cancelled/unknown does NOT cancel the issue or blame the new assi
   assert.match(note.body, /T-old.*已取消/);
   store.close();
 });
+
+test('syncTask running worker does NOT pull an in_review issue back to dispatched', () => {
+  const store = fresh();
+  const issue = store.create({ title: '待验收防倒退测试' });
+  store.update(issue.id, { status: 'dispatched', note: '开工' }, { kind: 'user' });
+  store.update(issue.id, { status: 'in_review', note: '已提交 MR 请验收' }, { kind: 'agent', name: '鹤鸣', isMain: false });
+  assert.equal(store.get(issue.id).status, 'in_review');
+
+  // worker 还没完全退出进程，writeback 扫到 running 状态，绝不能把 in_review 踢回 dispatched
+  const after = store.syncTask(issue.id, { taskId: 'T-live', workerSessionId: 'w-2', status: 'running' });
+  assert.equal(after.status, 'in_review');
+  store.close();
+});

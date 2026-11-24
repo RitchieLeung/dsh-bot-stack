@@ -235,10 +235,15 @@ export function resolveMainBot(statePath) {
     const bot = byId.get(id);
     const sessionIds = new Set([id]);
     if (typeof bot.sessionId === 'string') sessionIds.add(bot.sessionId);
+    if (Array.isArray(bot.parts)) {
+      for (const part of bot.parts) if (typeof part === 'string' && part) sessionIds.add(part);
+    }
     if (Array.isArray(bot.segments)) {
       for (const seg of bot.segments) if (seg && typeof seg.sessionId === 'string') sessionIds.add(seg.sessionId);
     }
-    return { id, name: typeof bot.name === 'string' && bot.name.trim() ? bot.name : id, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null, sessionIds };
+    const activePart = Array.isArray(bot.parts) && bot.parts.length ? bot.parts[bot.parts.length - 1] : null;
+    const latestSessionId = (typeof activePart === 'string' && activePart) || (typeof bot.sessionId === 'string' ? bot.sessionId : null);
+    return { id, name: typeof bot.name === 'string' && bot.name.trim() ? bot.name : id, sessionId: latestSessionId, sessionIds };
   } catch {
     return null;
   }
@@ -255,6 +260,9 @@ export function botNamesOf(statePath) {
       const name = typeof bot.name === 'string' && bot.name.trim() ? bot.name : bot.id;
       map.set(bot.id, name);
       if (typeof bot.sessionId === 'string') map.set(bot.sessionId, name);
+      if (Array.isArray(bot.parts)) {
+        for (const part of bot.parts) if (typeof part === 'string' && part) map.set(part, name);
+      }
       if (Array.isArray(bot.segments)) {
         for (const seg of bot.segments) if (seg && typeof seg.sessionId === 'string') map.set(seg.sessionId, name);
       }
@@ -268,13 +276,18 @@ export function botRoster(statePath) {
   try {
     const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
     const bots = parsed?.bots && typeof parsed.bots === 'object' ? Object.values(parsed.bots) : [];
+    const mainIds = new Set(Array.isArray(parsed?.mainBotIds) ? parsed.mainBotIds : []);
     return bots
       .filter(bot => bot && typeof bot.id === 'string')
-      .map(bot => ({
-        id: bot.id,
-        name: typeof bot.name === 'string' && bot.name.trim() ? bot.name : bot.id,
-        sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
-      }));
+      .map(bot => {
+        const activePart = Array.isArray(bot.parts) && bot.parts.length ? bot.parts[bot.parts.length - 1] : null;
+        return {
+          id: bot.id,
+          name: typeof bot.name === 'string' && bot.name.trim() ? bot.name : bot.id,
+          sessionId: (typeof activePart === 'string' && activePart) || (typeof bot.sessionId === 'string' ? bot.sessionId : null),
+          isMain: mainIds.has(bot.id),
+        };
+      });
   } catch {
     return [];
   }
@@ -349,9 +362,11 @@ export function apply(ctx, config = {}) {
     writeFileSync(healthPath, `${JSON.stringify({ at: Date.now(), pid: process.pid, module: fileURLToPath(import.meta.url) }, null, 2)}\n`);
   } catch { /* health file is best effort */ }
 
-  const mainBot = resolveMainBot(statePath);
-  const mainBotSessionIds = mainBot?.sessionIds ?? new Set();
-  const isMainOf = sid => typeof sid === 'string' && mainBotSessionIds.has(sid);
+  const currentMainBot = () => resolveMainBot(statePath);
+  const mainBot = currentMainBot();
+  // 实时读取 state.json 的 mainBot.sessionIds（含动态切段产生的 parts[]），
+  // 防止主 Bot 触发自动压缩切出新段后在 bot-issue 中丧失主 Bot 权限。
+  const isMainOf = sid => typeof sid === 'string' && Boolean(currentMainBot()?.sessionIds?.has(sid));
   const NOTICE_SUMMARY_MAX = 120;
   const boundSummary = summary => {
     const s = String(summary || '').replace(/\s+/g, ' ').trim();

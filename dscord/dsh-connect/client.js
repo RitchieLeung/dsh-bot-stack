@@ -13501,7 +13501,11 @@ function AssistantCell({ node, groupPart, sessionId, openFile, fileMentions, use
       });
     }),
     head ? (0, import_react31.createElement)(SpeakerHead, { bot: speaker, time: data.time }) : null,
-    activity.length ? (0, import_react31.createElement)("div", { className: "bt-agent-activity" }, activity.map((line, index) => (0, import_react31.createElement)("div", { key: index, className: "bt-agent-act", title: line }, (0, import_react31.createElement)("span", { className: "bt-agent-act-mark", "aria-hidden": true }), (0, import_react31.createElement)("span", { className: "bt-agent-act-text" }, activityParts(line))))) : null,
+    activity.length ? (0, import_react31.createElement)("div", { className: "bt-agent-activity" }, activity.map((line, index) => {
+      const diffPayload = parseDiffActivityLine(line);
+      if (diffPayload) return (0, import_react31.createElement)(FileDiffCard, { key: index, payload: diffPayload });
+      return (0, import_react31.createElement)("div", { key: index, className: "bt-agent-act", title: line }, (0, import_react31.createElement)("span", { className: "bt-agent-act-mark", "aria-hidden": true }), (0, import_react31.createElement)("span", { className: "bt-agent-act-text" }, activityParts(line)));
+    })) : null,
     reasoning ? (0, import_react31.createElement)(ThinkingRow, {
       text: reasoning,
       live: thinking !== void 0,
@@ -14240,8 +14244,140 @@ function GroupReplies({ sessionId, callId, done, content, roster, actions, useUi
   );
 }
 var isComputerCall = (name) => name === "cua" || name?.startsWith("cua_driver_native__") === true;
-var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "request_connector", "mail_send", "ask_user_question", "show_view", "browser_handoff", "read_group_chat", "remember", "forget"]);
+var DRAWN = /* @__PURE__ */ new Set(["message_bot", "stop_bot", "create_bot", "update_bot", "group_relay", "create_group", "update_group", "delete_group", "post_to_group", "ask_user", "request_secret", "request_connector", "mail_send", "ask_user_question", "show_view", "browser_handoff", "read_group_chat", "remember", "forget", "edit", "write", "apply_patch", "str_replace_editor", "edit_file", "write_file"]);
 var CARDS = /* @__PURE__ */ new Set(["ask_user", "request_secret", "request_connector", "mail_send", "show_view", "browser_handoff", "computer_handoff"]);
+function parseDiffActivityLine(line) {
+  if (typeof line !== "string") return null;
+  const trimmed = line.trim();
+  const raw = trimmed.startsWith("DIFF ") ? trimmed.slice(5).trim() : trimmed.startsWith("▸ DIFF ") ? trimmed.slice(7).trim() : null;
+  if (!raw || !raw.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function parseUnifiedDiffBlocks(diffText) {
+  if (typeof diffText !== "string" || !diffText.trim()) return { blocks: [], path: "" };
+  const lines = diffText.replace(/\r\n/g, "\n").split("\n");
+  const blocks = [];
+  let current = [];
+  let lineNo = 1;
+  let detectedPath = "";
+  const flush = () => {
+    if (current.length > 0) {
+      blocks.push(current);
+      current = [];
+    }
+  };
+  for (const line of lines) {
+    if (line.startsWith("*** Update File:") || line.startsWith("*** Add File:") || line.startsWith("*** Delete File:")) {
+      if (!detectedPath) detectedPath = line.slice(line.indexOf(":") + 1).trim();
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      if (!detectedPath) detectedPath = line.slice(4).trim().replace(/^b\//, "");
+      continue;
+    }
+    if (line.startsWith("--- ") || line.startsWith("diff --git ") || line.startsWith("index ") || line.startsWith("*** Begin Patch") || line.startsWith("*** End Patch")) continue;
+    if (line.startsWith("@@")) {
+      const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (m) lineNo = Number(m[1]);
+      flush();
+      continue;
+    }
+    if (line.startsWith("+")) {
+      current.push({ kind: "added", line: line.slice(1), number: lineNo++ });
+    } else if (line.startsWith("-")) {
+      current.push({ kind: "removed", line: line.slice(1) });
+    } else if (line.startsWith(" ")) {
+      current.push({ kind: "same", line: line.slice(1), number: lineNo++ });
+    } else if (line.length > 0) {
+      current.push({ kind: "same", line, number: lineNo++ });
+    }
+  }
+  flush();
+  return { blocks, path: detectedPath };
+}
+function FileDiffCard({ payload, failed = false }) {
+  const [expanded, setExpanded] = (0, import_react31.useState)(true);
+  const { name, dirPath, state, blocks, added, removed } = (0, import_react31.useMemo)(() => {
+    const p = payload && typeof payload === "object" ? payload : {};
+    let blocks2 = [];
+    let detectedPath = "";
+    if (typeof p.diff === "string" && p.diff.trim()) {
+      const parsed = parseUnifiedDiffBlocks(p.diff);
+      blocks2 = parsed.blocks;
+      detectedPath = parsed.path;
+    } else if (typeof p.oldText === "string" && typeof p.newText === "string") {
+      blocks2 = [lineDiff(p.oldText, p.newText)];
+    } else if (typeof p.newText === "string") {
+      blocks2 = [editLines(p.newText).map((line, idx) => ({ kind: "added", line, number: idx + 1 }))];
+    } else if (typeof p.oldText === "string") {
+      blocks2 = [editLines(p.oldText).map((line) => ({ kind: "removed", line }))];
+    }
+    const rawPath = String(p.path || detectedPath || "").replace(/\\/g, "/");
+    const slash = rawPath.lastIndexOf("/");
+    const fileName = slash >= 0 ? rawPath.slice(slash + 1) : rawPath || p.tool || "file";
+    const parent = slash > 0 ? rawPath.slice(0, slash) : "";
+    const all = blocks2.flat();
+    const plus = all.filter((r) => r.kind === "added").length;
+    const minus = all.filter((r) => r.kind === "removed").length;
+    const st = failed ? "Failed" : (p.kind === "create" || p.kind === "add" || p.tool === "write" || p.tool === "write_file") && typeof p.oldText !== "string" ? "Added" : "Modified";
+    return { name: fileName, dirPath: parent, state: st, blocks: blocks2, added: plus, removed: minus };
+  }, [payload, failed]);
+  const all = blocks.flat();
+  if (all.length === 0 && !name) return (0, import_react31.createElement)(CellEmpty);
+  return (0, import_react31.createElement)(
+    "div",
+    { className: "bt-learning-file bt-diff-card" },
+    (0, import_react31.createElement)(
+      "button",
+      { type: "button", className: "bt-learning-filehead bt-diff-toggle", "aria-expanded": expanded, onClick: () => setExpanded(!expanded) },
+      (0, import_react31.createElement)("span", { className: "bt-learning-name" }, name),
+      dirPath ? (0, import_react31.createElement)("span", { className: "bt-learning-path", title: `${dirPath}/${name}` }, dirPath) : null,
+      (0, import_react31.createElement)("span", { className: "bt-learning-spacer" }),
+      added > 0 ? (0, import_react31.createElement)("span", { className: "bt-learning-plus" }, `+${added}`) : null,
+      removed > 0 ? (0, import_react31.createElement)("span", { className: "bt-learning-minus" }, `−${removed}`) : null,
+      (0, import_react31.createElement)("span", { className: `bt-learning-state bt-learning-state-${state.toLowerCase()}` }, t(state))
+    ),
+    expanded && all.length > 0 ? (0, import_react31.createElement)(FileDiffBody, { blocks }) : null
+  );
+}
+function FileDiffBody({ blocks }) {
+  const [open, setOpen] = (0, import_react31.useState)(false);
+  const all = blocks.flat();
+  const folds = all.length > COLLAPSE_ROWS;
+  const shut = folds && !open;
+  return (0, import_react31.createElement)(
+    import_react31.Fragment,
+    null,
+    (0, import_react31.createElement)(
+      "div",
+      { className: shut ? "bt-learning-code bt-learning-shut" : "bt-learning-code" },
+      blocks.map((rows2, blockIndex) => [
+        blockIndex > 0 ? (0, import_react31.createElement)("div", { className: "bt-learning-gap", key: `gap-${blockIndex}` }) : null,
+        ...rows2.map((row, rowIndex) => (0, import_react31.createElement)(
+          "div",
+          { className: `bt-learning-row bt-learning-${row.kind}`, key: `${blockIndex}-${rowIndex}` },
+          (0, import_react31.createElement)("span", { className: "bt-learning-num", "aria-hidden": true }, row.number ?? ""),
+          (0, import_react31.createElement)("span", { className: "bt-learning-sign", "aria-hidden": true }, SIGNS[row.kind]),
+          (0, import_react31.createElement)("span", { className: "bt-learning-text" }, row.line || " ")
+        ))
+      ])
+    ),
+    folds ? (0, import_react31.createElement)(
+      "div",
+      { className: shut ? "bt-learning-morebar bt-learning-morebar-shut" : "bt-learning-morebar" },
+      (0, import_react31.createElement)(
+        "button",
+        { type: "button", className: "bt-learning-more", "aria-expanded": open, onClick: () => setOpen(!open) },
+        t(open ? "Show less" : "Show all {count} lines", { count: all.length })
+      )
+    ) : null
+  );
+}
 function callTree(root) {
   const calls = [];
   const seen = /* @__PURE__ */ new Set();
@@ -14353,6 +14489,29 @@ function renderCall(call2, { sessionId, roster, actions, useUi, useWork, findBot
     case "remember":
     case "forget":
       return done ? (0, import_react31.createElement)(MemoryEvent, { sessionId, scope: arg("scope"), tool, result: contentText(call2.content), failed: call2.isError === true, code: call2.error?.code, roster, actions, findBot }) : (0, import_react31.createElement)(CellEmpty);
+    case "edit":
+    case "write":
+    case "apply_patch":
+    case "str_replace_editor":
+    case "edit_file":
+    case "write_file": {
+      const filePath = arg("file_path") ?? arg("path") ?? arg("TargetFile") ?? arg("file") ?? "";
+      const diffText = arg("patch") ?? arg("diff") ?? (tool === "apply_patch" ? arg("input") : void 0);
+      const oldText = arg("old_string") ?? arg("old_str") ?? arg("oldText") ?? arg("Target");
+      const newText = arg("new_string") ?? arg("new_str") ?? arg("newText") ?? arg("Replacement") ?? arg("content") ?? arg("Content");
+      if (!filePath && !diffText && oldText === void 0 && newText === void 0) return (0, import_react31.createElement)(CellEmpty);
+      return (0, import_react31.createElement)(FileDiffCard, {
+        payload: {
+          tool,
+          path: filePath,
+          kind: (tool === "write" || tool === "write_file") && oldText === void 0 ? "create" : "update",
+          diff: diffText,
+          oldText,
+          newText
+        },
+        failed: done && call2.isError === true
+      });
+    }
     default:
       if (isComputerCall(tool)) {
         return (0, import_react31.createElement)(
@@ -23190,6 +23349,7 @@ function GeneralPage({ roster, actions, run: run2 }) {
         (0, import_react54.createElement)(Switch, { label: t("Enter sends message"), on: prefs.enterToSend !== false, onChange: (enterToSend) => run2(actions.setPrefs({ enterToSend })) })
       )
     ),
+    (0, import_react54.createElement)(ContextBudgetSection, { key: "budgets", prefs, actions, run: run2 }),
     actions.setSurface ? (0, import_react54.createElement)(
       SetSection,
       { key: "mode", title: t("Mode") },
@@ -23201,6 +23361,94 @@ function GeneralPage({ roster, actions, run: run2 }) {
     ) : null,
     (0, import_react54.createElement)(LocationsSection, { key: "places", actions, run: run2 })
   ];
+}
+function BudgetNumberRow({ label, hint, value, defVal, min, max, unit, onSave }) {
+  const [draft, setDraft] = (0, import_react54.useState)(String(value));
+  (0, import_react54.useEffect)(() => { setDraft(String(value)); }, [value]);
+  const commit = () => {
+    const num = Number.parseInt(draft.trim(), 10);
+    if (!Number.isFinite(num)) { setDraft(String(value)); return; }
+    const clamped = min === 0 && num === 0 ? 0 : Math.max(min === 0 ? 0 : min, Math.min(max, num));
+    setDraft(String(clamped));
+    if (clamped !== value) onSave(clamped);
+  };
+  return (0, import_react54.createElement)(
+    SetRow,
+    { label },
+    (0, import_react54.createElement)(
+      "div",
+      { style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+      (0, import_react54.createElement)("input", {
+        type: "number",
+        min,
+        max,
+        value: draft,
+        title: hint,
+        onChange: (e) => setDraft(e.target.value),
+        onBlur: commit,
+        onKeyDown: (e) => { if (e.key === "Enter") { e.currentTarget.blur(); } },
+        style: { width: 84, padding: "4px 8px", borderRadius: 7, border: "1px solid var(--dsw-alias-border-l2, #d4d4d8)", background: "var(--dsw-alias-bg-layer-1, transparent)", color: "inherit", fontSize: 13, fontVariantNumeric: "tabular-nums" }
+      }),
+      unit ? (0, import_react54.createElement)("span", { style: { fontSize: 12, opacity: 0.72 } }, unit) : null,
+      hint ? (0, import_react54.createElement)("span", { style: { fontSize: 11.5, opacity: 0.58 } }, hint) : null,
+      value !== defVal ? (0, import_react54.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", onClick: () => onSave(null) }, t("Reset")) : null
+    )
+  );
+}
+function ContextBudgetSection({ prefs, actions, run: run2 }) {
+  const ratio = Number.isInteger(prefs.compactRatio) ? prefs.compactRatio : 45;
+  const maxK = Number.isInteger(prefs.compactMaxK) ? prefs.compactMaxK : 120;
+  const frontMax = Number.isInteger(prefs.frontMaxToolCalls) ? prefs.frontMaxToolCalls : 6;
+  const recallMax = Number.isInteger(prefs.recallMaxChars) ? prefs.recallMaxChars : 12000;
+  const commitMaxK = (val) => {
+    if (val === null) return run2(actions.setPrefs({ compactMaxK: null }));
+    const next = val === 0 ? 0 : Math.max(32, Math.min(500, val));
+    return run2(actions.setPrefs({ compactMaxK: next }));
+  };
+  return (0, import_react54.createElement)(
+    SetSection,
+    { title: "上下文与预算" },
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "自动压缩比例",
+      value: ratio,
+      defVal: 45,
+      min: 20,
+      max: 90,
+      unit: "%",
+      hint: "20–90%，默认 45%",
+      onSave: (v) => run2(actions.setPrefs({ compactRatio: v }))
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "上下文绝对上限",
+      value: maxK,
+      defVal: 120,
+      min: 0,
+      max: 500,
+      unit: "K tokens",
+      hint: "防 1M 模型膨胀；32–500，0 表示仅按比例",
+      onSave: commitMaxK
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "前台单轮执行工具上限",
+      value: frontMax,
+      defVal: 6,
+      min: 0,
+      max: 50,
+      unit: "次",
+      hint: "超限强制派子 agent（dispatch_work）；0 不限",
+      onSave: (v) => run2(actions.setPrefs({ frontMaxToolCalls: v }))
+    }),
+    (0, import_react54.createElement)(BudgetNumberRow, {
+      label: "单次 recall 返回上限",
+      value: recallMax,
+      defVal: 12000,
+      min: 2000,
+      max: 60000,
+      unit: "字符",
+      hint: "默认 12000，防止单次记忆召回灌爆上下文",
+      onSave: (v) => run2(actions.setPrefs({ recallMaxChars: v }))
+    })
+  );
 }
 function LocationsSection({ actions, run: run2 }) {
   const app = globalThis.dsBotApp;
@@ -28780,6 +29028,68 @@ body[data-ds-dark-theme] .dscord-connect {
         !needsBinding && state.value?.models?.available && h(ModelForm, { key: JSON.stringify(bot.modelSelection), bot, connection, state, t }));
     }
 
+    function ContextBudgetPanel() {
+      const [prefs, setPrefs] = React.useState(null);
+      const [saving, setSaving] = React.useState(false);
+      const [msg, setMsg] = React.useState('');
+      const [err, setErr] = React.useState('');
+      const callKernel = React.useCallback(async (endpoint, payload = {}) => {
+        const res = await fetch('/api/dscord/kernel', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ endpoint, payload }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.ok) throw new Error(data?.error?.message || `请求失败 (${res.status})`);
+        return data.value;
+      }, []);
+      React.useEffect(() => {
+        let alive = true;
+        void callKernel('state', {}).then(v => { if (alive) setPrefs(v?.prefs || {}); }).catch(() => {});
+        return () => { alive = false; };
+      }, [callKernel]);
+      const saveField = async (patch) => {
+        setSaving(true); setErr(''); setMsg('');
+        try {
+          const next = await callKernel('set-prefs', patch);
+          setPrefs(next || {});
+          setMsg('已保存并立即生效');
+        } catch (e) { setErr(e?.message || String(e)); } finally { setSaving(false); }
+      };
+      if (!prefs) return null;
+      const rows = [
+        { key: 'compactRatio', label: '自动压缩比例', defVal: 45, min: 20, max: 90, unit: '%', hint: '20–90%，默认 45%' },
+        { key: 'compactMaxK', label: '上下文绝对上限', defVal: 120, min: 0, max: 500, unit: 'K tokens', hint: '防 1M 模型膨胀；32–500，0 仅按比例' },
+        { key: 'frontMaxToolCalls', label: '前台单轮执行工具上限', defVal: 6, min: 0, max: 50, unit: '次', hint: '超限强制派子 agent（dispatch_work）；0 不限' },
+        { key: 'recallMaxChars', label: '单次 recall 返回上限', defVal: 12000, min: 2000, max: 60000, unit: '字符', hint: '默认 12000，防单次记忆召回灌爆上下文' },
+      ];
+      return h('section', { className: 'dc-panel', 'aria-label': '上下文与预算' },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 } },
+          h('h2', { style: { margin: 0 } }, '上下文与预算（实时生效）'),
+          msg ? h('span', { style: { fontSize: 12, color: 'var(--dsw-alias-state-success-primary, #16a34a)' } }, msg) : null),
+        err ? h('p', { role: 'alert', className: 'dc-notice dc-error' }, err) : null,
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          rows.map(r => {
+            const val = Number.isInteger(prefs[r.key]) ? prefs[r.key] : r.defVal;
+            return h('div', { key: r.key, style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' } },
+              h('span', { style: { width: 168, fontSize: 13, fontWeight: 500 } }, r.label),
+              h('input', {
+                type: 'number', min: r.min, max: r.max, defaultValue: val, key: `${r.key}:${val}`, disabled: saving,
+                style: { width: 88, padding: '4px 8px', borderRadius: 7, border: '1px solid var(--dsw-alias-border-l2, #d4d4d8)', background: 'var(--dsw-alias-bg-layer-1, transparent)', color: 'inherit', fontSize: 13, fontVariantNumeric: 'tabular-nums' },
+                onBlur: (e) => {
+                  const num = Number.parseInt(e.target.value.trim(), 10);
+                  if (!Number.isFinite(num) || num === val) return;
+                  let clamped = r.key === 'compactMaxK' ? (num === 0 ? 0 : Math.max(32, Math.min(500, num))) : Math.max(r.min, Math.min(r.max, num));
+                  void saveField({ [r.key]: clamped });
+                },
+                onKeyDown: (e) => { if (e.key === 'Enter') e.currentTarget.blur(); },
+              }),
+              h('span', { style: { fontSize: 12, opacity: 0.72 } }, r.unit),
+              h('span', { style: { fontSize: 11.5, opacity: 0.58 } }, r.hint),
+              val !== r.defVal ? h(Button, { variant: 'outline', type: 'button', disabled: saving, onClick: () => void saveField({ [r.key]: null }) }, '重置') : null);
+          })));
+    }
+
     function ConnectionPage({ connection, t }) {
       const state = React.useSyncExternalStore(connection.subscribe, connection.getSnapshot, connection.getSnapshot);
       const value = state.value;
@@ -28801,6 +29111,7 @@ body[data-ds-dark-theme] .dscord-connect {
           runtimeError && h('p', { role: 'status', className: 'dc-notice dc-error' }, value.runtime.message || t('runtimeUnavailable')),
           !state.loading && !value?.user && h(LoginForm, { key: value?.serverUrl || 'login', connection, state, t }),
           value?.nativeMode && h(LocalKernelPanel, { key: `${value.hostId || 'local'}/${value.user?.id || 'local-owner'}`, connection, state, t }),
+          h(ContextBudgetPanel, { key: 'context-budget-panel' }),
           value?.user && h(React.Fragment, null,
             h('section', { className: 'dc-panel dc-account', 'aria-label': t('account') },
               h('div', null,

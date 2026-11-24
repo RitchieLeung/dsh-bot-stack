@@ -818,8 +818,10 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
           kind: 'result',
         });
       }
-    } else if (ACTIVE_STATUSES.includes(row.status) && row.status !== 'dispatched') {
+    } else if (row.status === 'open' || row.status === 'discussing') {
       // First sighting of the live task: the issue is now owned by a worker.
+      // Never pull an `in_review` issue back to `dispatched` just because its worker
+      // hasn't finished tearing down after calling issue_update(in_review).
       setStatusUnchecked(id, 'dispatched', '');
     }
     return getFull(id);
