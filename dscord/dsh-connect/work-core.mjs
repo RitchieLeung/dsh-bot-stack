@@ -14,7 +14,7 @@ import { collectArtifacts, collectStagedArtifacts, MAX_ARTIFACTS } from '../dsh-
 
 // Tools the front keeps. Everything else is refused there and done by a worker.
 export const FRONT_TOOLS = new Set([
-  'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note',
+  'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note', 'task_extend',
   'recall', 'contacts', 'memory_source', 'raw_source_query',
   'read_group_chat', 'read_own_chat', 'list_bots', 'message_bot', 'post_to_group', 'group_relay',
   'read_image', 'web_fetch',
@@ -30,7 +30,7 @@ export const WORKER_DENY = new Set([
   'message_bot', 'post_to_group', 'group_relay',
   'create_bot', 'update_bot', 'stop_bot', 'create_group', 'update_group', 'delete_group', 'group_goal',
   'schedule_create', 'schedule_edit', 'remember', 'forget', 'review_memory', 'skill_retrospect',
-  'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note',
+  'dispatch_work', 'task_join', 'task_status', 'task_cancel', 'task_note', 'task_extend',
   // 工作者可读事务、评论并推进到待验收；建单、指派和改依赖仍归主 Bot。
   'issue_create', 'issue_assign', 'issue_link', 'issue_unlink',
   // 工作者不再套娃拉起 DSH 子 agent / 团队任务 / 目标，专注完成当前任务。
@@ -148,8 +148,9 @@ async function looseFiles(dir, prefix = '', depth = 0, found = []) {
 }
 
 export class WorkCore {
-  constructor({ ctx, native, node, state, save, maxWorkers = 3, timeoutMs = 60 * 60_000 }) {
-    Object.assign(this, { ctx, native, node, state, save, maxWorkers, timeoutMs });
+  constructor({ ctx, native, node, state, save, maxWorkers = 3, timeoutMs = 60 * 60_000,
+    graceMs = 15 * 60_000, idleTimeoutMs = 20 * 60_000, hardTimeoutMs = 4 * 60 * 60_000 }) {
+    Object.assign(this, { ctx, native, node, state, save, maxWorkers, timeoutMs, graceMs, idleTimeoutMs, hardTimeoutMs });
     this.state.tasks ||= {};
     this.frontSessions = new Set();
     this.frontToolCounts = new Map();
@@ -247,17 +248,25 @@ export class WorkCore {
           plain: { type: 'boolean', description: '这位请求者不该看到技术内部信息时为 true：带堆栈、异常类型、源码位置或日志原文的交付文本文件不会发给他' } },
         execute: args => this.join(args.id, args) },
       { name: 'task_status', output,
-        description: '查看本 Bot 最近的工作者任务和状态。',
+        description: '查看本 Bot 最近的工作者任务和状态；传入任务编号时可跨 Bot 查看该任务的详细健康度（已运行时长、工具调用数、最近活动时间、当前工具、最后进度与输出）。',
         parameters: { id: { type: 'string', description: '任务编号；不填列出最近的任务' } },
         execute: args => this.status(args.id) },
       { name: 'task_cancel', output,
-        description: '取消一个进行中的工作者任务。',
+        description: '取消一个进行中的工作者任务（主 Bot 巡检发现状态不合理或卡死时，也可跨 Bot 取消）。',
         parameters: { id: { type: 'string', required: true, description: '任务编号' } },
         execute: args => this.cancel(args.id) },
       { name: 'task_note', output,
-        description: '给进行中的工作者补充信息或修改要求。',
+        description: '给进行中的工作者补充信息或修改要求（主 Bot 也可跨 Bot 发送纠偏指令）。',
         parameters: { id: { type: 'string', required: true, description: '任务编号' }, text: { type: 'string', required: true, description: '要转给工作者的内容' } },
         execute: args => this.note(args.id, args.text) },
+      { name: 'task_extend', output,
+        description: '给超时巡检中但状态合理、仍在正常推进的工作者任务续期（不打断工作者；主 Bot 可跨 Bot 续期）。',
+        parameters: {
+          id: { type: 'string', required: true, description: '任务编号' },
+          minutes: { type: 'number', description: '续期分钟数，默认 60（10~240）' },
+          reason: { type: 'string', description: '续期原因（可选）' },
+        },
+        execute: args => this.extend(args.id, args) },
     ];
   }
 
@@ -345,7 +354,8 @@ export class WorkCore {
     const presets = this.ctx.get?.('agentPresets');
     const preset = presets && (await presets.list()).some(item => item.id === 'standard' && !item.broken) ? { agentPreset: 'standard' } : {};
     const { sessionId } = await this.ctx.sessionController.create({ cwd: dir, ...preset });
-    mark(task, 'running', 'core', { sessionId, dir, startedAt: new Date().toISOString() });
+    const nowIso = new Date().toISOString();
+    mark(task, 'running', 'core', { sessionId, dir, startedAt: nowIso, lastActivityAt: nowIso });
     await this.save();
     const agent = await this.native.agent(sessionId);
     // Nobody answers a worker's approval prompts, so one would leave the task running
@@ -376,7 +386,7 @@ export class WorkCore {
       if (!WORKER_DENY.has(name) && !CARD_TOOLS.has(name)) continue;
       try { agent.ctx.tools.restrict?.({ deny: [name] }); } catch { /* guarded fallback */ }
     }
-    this.timers.set(task.id, setTimeout(() => void this.timeout(task.id), this.timeoutMs));
+    this.scheduleCheck(task, this.timeoutMs);
     await this.prompt(sessionId, this.briefText(task));
   }
 
@@ -427,6 +437,7 @@ export class WorkCore {
     if (status !== 'progress' && !reply) return '没有汇报：done 和 failed 需要 reply，也就是原样发给提出请求的人的那段话。';
     if (status === 'progress') {
       task.progress = summary.slice(0, 2000);
+      task.lastActivityAt = new Date().toISOString();
       await this.save();
       return '已记录进度，继续工作。';
     }
@@ -480,15 +491,53 @@ export class WorkCore {
   }
 
 
+  /** Resolve a task by ID on this Bot first, or across sibling local Bots (for Main Bot inspection/control). */
+  resolveTask(id) {
+    if (!id) return null;
+    if (this.state.tasks[id]) return { core: this, task: this.state.tasks[id] };
+    for (const core of cores.values()) {
+      if (core !== this && core.state?.tasks?.[id]) return { core, task: core.state.tasks[id] };
+    }
+    return null;
+  }
+
+  /** Human-readable health snapshot for a single worker task. */
+  taskHealthText(task) {
+    const now = Date.now();
+    const startedMs = task.startedAt ? Date.parse(task.startedAt) : Date.parse(task.createdAt || '') || now;
+    const elapsedMin = Math.max(0, Math.round((now - startedMs) / 60_000));
+    const lastActMs = task.lastActivityAt ? Date.parse(task.lastActivityAt) : startedMs;
+    const idleMin = Math.max(0, Math.round((now - lastActMs) / 60_000));
+    const owner = this.botName || this.node?.localpart || this.node?.nativeBotId || 'Bot';
+    const lines = [
+      `${task.id} [${task.status}] ${owner} · ${task.title}`,
+      `- 已运行：${elapsedMin} 分钟 · 工具调用：${task.toolCalls || 0} 次 · 最近活动：${idleMin} 分钟前${task.busy ? '（当前忙）' : '（当前空闲）'}`,
+    ];
+    if (task.origin?.issueId) lines.push(`- 关联事务：${task.origin.issueId}`);
+    if (task.doing?.tool) lines.push(`- 当前动作：${task.doing.tool}${task.doing.target ? ` (${task.doing.target})` : ''}`);
+    if (task.progress) lines.push(`- 最后进度：${task.progress}`);
+    if (task.waiting) lines.push(`- 正在等待前台答复：${task.waiting.slice(0, 200)}`);
+    if (task.lastText) lines.push(`- 最近输出：${task.lastText.slice(-300).replace(/\s+/g, ' ').trim()}`);
+    if (task.summary) lines.push(`- 摘要：${task.summary.slice(0, 300)}`);
+    return lines.join('\n');
+  }
+
   status(id) {
-    const list = id ? [this.state.tasks[id]].filter(Boolean) : this.tasks().filter(task => !task.joined).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
-    if (!list.length) return id ? `没有任务 ${id}。` : '没有工作者任务。';
+    if (id) {
+      const hit = this.resolveTask(id);
+      if (!hit) return `没有任务 ${id}。`;
+      return hit.core.taskHealthText(hit.task);
+    }
+    const list = this.tasks().filter(task => !task.joined).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10);
+    if (!list.length) return '没有工作者任务。';
     return list.map(task => `${task.id} ${task.status} ${task.title}${task.progress && !ended(task) ? ` · 进度：${task.progress}` : ''}${task.summary ? ` · ${task.summary.slice(0, 300)}` : ''}`).join('\n');
   }
 
   async cancel(id) {
-    const task = this.state.tasks[id];
-    if (!task) return `没有任务 ${id}。`;
+    const hit = this.resolveTask(id);
+    if (!hit) return `没有任务 ${id}。`;
+    if (hit.core !== this) return hit.core.cancel(id);
+    const task = hit.task;
     if (ended(task)) return `${id} 已经结束（${task.status}）。`;
     if (task.sessionId) await this.native.agent(task.sessionId).then(agent => agent.cancel({ kind: 'user' })).catch(() => {});
     await this.finish(task, { status: 'cancelled', summary: '已取消。' }, { notify: false, by: 'front' });
@@ -496,23 +545,144 @@ export class WorkCore {
   }
 
   async note(id, text) {
-    const task = this.state.tasks[id];
-    if (!task || ended(task)) return `没有进行中的任务 ${id}。`;
+    const hit = this.resolveTask(id);
+    if (!hit || ended(hit.task)) return `没有进行中的任务 ${id}。`;
+    if (hit.core !== this) return hit.core.note(id, text);
+    const task = hit.task;
     if (task.status === 'queued') { task.brief += `\n\n补充：${text}`; await this.save(); return '已补充到排队中的任务说明。'; }
     const answer = Boolean(task.waiting);
     delete task.waiting;
     task.unread = (task.unread || 0) + 1;
+    task.lastActivityAt = new Date().toISOString();
     await this.save();
     await this.prompt(task.sessionId, `${answer ? '前台答复' : '前台补充'}：${text}`, task.busy ? 'steer' : 'queue');
     return '已转给工作者。';
   }
 
+  async extend(id, { minutes = 60, reason = '' } = {}) {
+    const hit = this.resolveTask(id);
+    if (!hit || ended(hit.task)) return `没有进行中的任务 ${id}。`;
+    if (hit.core !== this) return hit.core.extend(id, { minutes, reason });
+    const task = hit.task;
+    const mins = Math.max(10, Math.min(240, Math.round(Number(minutes) || 60)));
+    const now = Date.now();
+    const startedMs = task.startedAt ? Date.parse(task.startedAt) : now;
+    let delayMs = mins * 60_000;
+    let capped = false;
+    if (this.hardTimeoutMs > 0) {
+      const remaining = Math.max(0, startedMs + this.hardTimeoutMs - now);
+      if (remaining <= 0) return `${id} 已达到最长硬上限（${Math.round(this.hardTimeoutMs / 60_000)} 分钟），无法继续续期。`;
+      if (delayMs > remaining) { delayMs = remaining; capped = true; }
+    }
+    task.extendedAt = new Date(now).toISOString();
+    task.extendedCount = (task.extendedCount || 0) + 1;
+    task.events = [...(task.events || []), { at: task.extendedAt, from: task.status, to: task.status, by: 'front',
+      note: `续期 ${Math.round(delayMs / 60_000)} 分钟${reason ? `：${String(reason).slice(0, 200)}` : ''}` }];
+    await this.save();
+    this.scheduleCheck(task, delayMs);
+    const actualMin = Math.max(1, Math.round(delayMs / 60_000));
+    return `已为 ${id} 续期 ${actualMin} 分钟${capped ? `（受最长上限 ${Math.round(this.hardTimeoutMs / 60_000)} 分钟限制）` : ''}，工作者未被中断，下次巡检将在 ${actualMin} 分钟后触发。`;
+  }
 
-  async timeout(id) {
+  scheduleCheck(task, delayMs) {
+    clearTimeout(this.timers.get(task.id));
+    if (!delayMs || delayMs <= 0) return;
+    this.timers.set(task.id, setTimeout(() => void this.checkTimeout(task.id), delayMs));
+  }
+
+  async hardStop(task, summary) {
+    if (task.sessionId) await this.native.agent(task.sessionId).then(agent => agent.cancel({ kind: 'user' })).catch(() => {});
+    await this.finish(task, { status: 'failed', summary });
+  }
+
+  /**
+   * Soft timeout watchdog: instead of blindly killing a working task at 60 minutes,
+   * notify the Main Bot with a live health snapshot so it can inspect and decide
+   * whether to extend (`task_extend`), steer (`task_note`), or stop (`task_cancel`).
+   */
+  async checkTimeout(id) {
     const task = this.state.tasks[id];
     if (!task || ended(task)) return;
-    if (task.sessionId) await this.native.agent(task.sessionId).then(agent => agent.cancel({ kind: 'user' })).catch(() => {});
-    await this.finish(task, { status: 'failed', summary: `超过 ${Math.round(this.timeoutMs / 60_000)} 分钟没有完成，已停止。${task.progress ? `最后进度：${task.progress}` : ''}` });
+    const now = Date.now();
+    const startedMs = task.startedAt ? Date.parse(task.startedAt) : now;
+    if (this.hardTimeoutMs > 0 && now - startedMs >= this.hardTimeoutMs) {
+      await this.hardStop(task, `超过最长上限（${Math.round(this.hardTimeoutMs / 60_000)} 分钟）仍未完成，已停止。${task.progress ? `最后进度：${task.progress}` : ''}`);
+      return;
+    }
+    const notifiedAt = new Date(now).toISOString();
+    task.lastTimeoutCheckAt = notifiedAt;
+    task.timeoutCheckCount = (task.timeoutCheckCount || 0) + 1;
+    await this.save();
+    await this.notifyTimeoutCheck(task);
+    clearTimeout(this.timers.get(task.id));
+    const grace = Math.max(1_000, this.graceMs || 15 * 60_000);
+    this.timers.set(task.id, setTimeout(() => void this.graceTimeout(task.id, notifiedAt), grace));
+  }
+
+  async graceTimeout(id, notifiedAt) {
+    const task = this.state.tasks[id];
+    if (!task || ended(task)) return;
+    // Already extended after this check notice — the extend() call rescheduled its own timer.
+    if (task.extendedAt && task.extendedAt >= notifiedAt) return;
+    const now = Date.now();
+    const startedMs = task.startedAt ? Date.parse(task.startedAt) : now;
+    if (this.hardTimeoutMs > 0 && now - startedMs >= this.hardTimeoutMs) {
+      await this.hardStop(task, `超过最长上限（${Math.round(this.hardTimeoutMs / 60_000)} 分钟）仍未完成，已停止。${task.progress ? `最后进度：${task.progress}` : ''}`);
+      return;
+    }
+    const lastActMs = task.lastActivityAt ? Date.parse(task.lastActivityAt) : startedMs;
+    const idleMs = now - lastActMs;
+    if (this.idleTimeoutMs > 0 && idleMs >= this.idleTimeoutMs) {
+      await this.hardStop(task, `巡检通知发出后无人续期，且工作者已连续无活动 ${Math.round(idleMs / 60_000)} 分钟，判定卡死并已停止。${task.progress ? `最后进度：${task.progress}` : ''}`);
+      return;
+    }
+    // Worker is still actively making progress — do not interrupt blindly; schedule next check.
+    const nextDelay = this.hardTimeoutMs > 0
+      ? Math.min(this.timeoutMs, Math.max(60_000, startedMs + this.hardTimeoutMs - now))
+      : this.timeoutMs;
+    this.scheduleCheck(task, nextDelay);
+  }
+
+  /** Send the timeout inspection prompt to the Main Bot (falling back to this Bot's own front). */
+  async notifyTimeoutCheck(task) {
+    const health = this.taskHealthText(task);
+    const prompt = [
+      `【任务超时巡检提醒（第 ${task.timeoutCheckCount || 1} 次）】`,
+      '以下后台工作者已运行超过巡检阈值，系统**没有强行打断**它。请你先核查它的状态是否合理：',
+      '',
+      health,
+      '',
+      '处理方式：',
+      `- 若状态合理、仍在正常推进：请调用 task_extend({ id: "${task.id}", minutes: 60 }) 续期，不要打断工作者；`,
+      `- 若需要补充要求或纠偏：请调用 task_note({ id: "${task.id}", text: "..." })；`,
+      `- 若明显卡死、死循环或状态不合理：请调用 task_cancel({ id: "${task.id}" }) 终止；`,
+      `- 需要查看更多最新状态可随时调用 task_status({ id: "${task.id}" })。`,
+    ].join('\n');
+    try {
+      const state = typeof this.native?.state === 'function' ? await this.native.state().catch(() => null) : null;
+      const mainBotId = state?.mainBotId || state?.mainBotIds?.[0] || null;
+      const mainBot = mainBotId ? state?.bots?.find(b => b.id === mainBotId) : null;
+      if (mainBot?.sessionId) {
+        const mainCore = cores.get(mainBot.id);
+        if (mainCore) {
+          const mainAgent = await this.native.agent(mainBot.sessionId).catch(() => null);
+          if (mainAgent) await mainCore.serveFront(mainAgent).catch(() => {});
+        }
+        await this.prompt(mainBot.sessionId, prompt, 'queue');
+        return;
+      }
+    } catch { /* fall through to own front or onResult */ }
+    const ownFront = [...this.frontSessions].at(-1);
+    if (ownFront) {
+      await this.prompt(ownFront, prompt, 'queue').catch(() => {});
+      return;
+    }
+    await this.notify(task, { kind: 'timeout_check', prompt }).catch(() => {});
+  }
+
+  /** Legacy alias kept for tests or manual invocation: triggers the watchdog check. */
+  async timeout(id) {
+    return this.checkTimeout(id);
   }
 
   /** Worker Session events: a turn that ends without a report gets one reminder, then fails. */
@@ -567,6 +737,7 @@ export class WorkCore {
       }
       return false;
     }
+    task.lastActivityAt = new Date().toISOString();
     if (event.type === 'turn/start') task.busy = true;
     if (event.type === 'user/message' && /^前台(?:补充|答复)：/.test(textOf(event.data?.message || event.data)) && task.unread > 0) task.unread--;
     if (event.type === 'assistant/message') { const text = textOf(event.data?.message); if (text) task.lastText = text.slice(-2000); }
