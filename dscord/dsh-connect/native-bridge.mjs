@@ -50,6 +50,12 @@ export class NativeBridge {
     this.durable = new Set(Object.values(this.state.requests).filter(terminal).map(record => record.requestId));
     this.disposeEvents = this.ctx.on('session/event', (session, event) => this.event(session, event));
     this.disposeUsage = this.ctx.on('llm/stream', (options, next) => this.observeUsage(options, next));
+    // Eagerly attach front tools (dispatch_work, task_*) to the Bot's active
+    // session at startup so step 1 after a restart does not briefly drop them.
+    void this.native.bot(this.node.nativeBotId)
+      .then(bot => (bot?.sessionId ? this.native.agent(bot.sessionId) : null))
+      .then(agent => (agent ? this.core.serveFront(agent) : null))
+      .catch(() => {});
     return this;
   }
 

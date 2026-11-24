@@ -229,10 +229,12 @@ export class LocalAgentAdapter extends LlmAdapter {
     const delta = fresh ? [] : messages.slice(at + 1)
 
     // Results of the calls the last step emitted answer the suspended CLI calls.
+    // Scan `messages` (not just `delta`) so a pruned `live.handed` marker can
+    // never strand a pending LoopbackMcp call waiting forever for its result.
     // A user message never resolves an approve_agent_action pending: only that
     // tool's own result may. User text may answer a pending bridged MCP call
     // whose DSH tool concluded the turn (a question-type card).
-    for (const message of delta) {
+    for (const message of (fresh ? messages : delta)) {
       if (message.role !== 'tool') continue
       const pending = live.pending.get(message.toolCallId)
       if (pending === undefined) continue
@@ -347,7 +349,10 @@ export class LocalAgentAdapter extends LlmAdapter {
     }
 
     // The last DSH message is handed now; a later call sends only what follows.
-    const last = messages.at(-1)
+    // Prefer the last durable (non-context-snapshot) message so pruning a
+    // transient memory context snapshot on the next step does not invalidate
+    // `live.handed` and trigger a bogus replay.
+    const last = [...messages].reverse().find(message => !(message.role === 'user' && isContextMessage(message))) ?? messages.at(-1)
     if (last !== undefined) {
       live.handed = last.id
       this.deps.saveRecord(sessionId, { route: live.route, cliSessionId: live.cliSessionId, cwd, handedId: live.handed, promptHash: live.promptHash ?? promptHash, model: options.model })
