@@ -234,11 +234,13 @@ export class LocalAgentAdapter extends LlmAdapter {
     // A user message never resolves an approve_agent_action pending: only that
     // tool's own result may. User text may answer a pending bridged MCP call
     // whose DSH tool concluded the turn (a question-type card).
+    let resolvedPending = 0
     for (const message of (fresh ? messages : delta)) {
       if (message.role !== 'tool') continue
       const pending = live.pending.get(message.toolCallId)
       if (pending === undefined) continue
       live.pending.delete(message.toolCallId)
+      resolvedPending += 1
       pending.resolve({ text: textOf(message.content) || (message.isError ? 'the call failed' : ''), isError: message.isError === true })
     }
     // Runtime, memory and background producers remain context even though DSH
@@ -320,7 +322,11 @@ export class LocalAgentAdapter extends LlmAdapter {
     }
 
     const inputText = message => message.source?.sender || message.source?.actor || message.source?.kind === 'bot' ? sourceText(message) : textOf(message.content)
-    let promptText = fresh ? renderReplay(messages, system)
+    // When this step only answered pending LoopbackMcp tool calls (and has no
+    // new user messages), never trigger a full-history replay even if `fresh`
+    // was true due to a pruned `live.handed` marker.
+    let promptText = (resolvedPending > 0 && remaining.length === 0) ? ''
+      : fresh ? renderReplay(messages, system)
       : remaining.length === 0 ? '' : [live.contextText, contextText, ...remaining.map(inputText)].filter(text => text !== '').join('\n\n')
     if (promptText !== '') live.contextText = ''
     else if (contextText !== '') live.contextText = [live.contextText, contextText].filter(Boolean).join('\n\n')
@@ -370,11 +376,20 @@ export class LocalAgentAdapter extends LlmAdapter {
   sendInput(live, text, signal) {
     if (live.state !== 'idle') {
       if (live.spec.kind === 'acp') { live.queue.push(text); return }
-      try {
-        Promise.resolve(live.engine.steer?.(live.engineSession, text))
-          .catch(error => live.push({ type: 'error', error }))
-      } catch (error) {
-        live.push({ type: 'error', error })
+      const doSteer = () => {
+        try {
+          Promise.resolve(live.engine.steer?.(live.engineSession, text))
+            .catch(error => live.push({ type: 'error', error }))
+        } catch (error) {
+          live.push({ type: 'error', error })
+        }
+      }
+      if (live.compactPromise) {
+        Promise.resolve(live.compactPromise).catch(() => {}).then(() => {
+          if (!live.dead && !signal?.aborted) doSteer()
+        })
+      } else {
+        doSteer()
       }
       return
     }

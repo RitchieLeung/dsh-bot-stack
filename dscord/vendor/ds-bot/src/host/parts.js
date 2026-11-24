@@ -338,7 +338,7 @@ export function install(rt) {
       if (rt.isLocalAgentSession?.(sessionId)) {
         const ok = await rt.compactLocalAgent?.(sessionId)
         if (!ok) throw new Error('当前本地 CLI 会话尚未启动或不支持手动压缩（请先发一条消息激活会话后再 /compact）。')
-        return null
+        return { compacted: true, summary: '已触发本地 CLI 会话压缩（thread/compact/start）。' }
       }
       const result = await condenseRange(target, () => original.compactNow.call(this, target, signal, commandId))
       if (result !== null) {

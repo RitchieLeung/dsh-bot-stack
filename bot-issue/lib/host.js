@@ -223,10 +223,21 @@ export function stageIssueAttachments({ store, stagingDir, issueNumber, issueId,
   return { attachments, skipped };
 }
 
+const stateJsonCache = new Map();
+function readStateJson(statePath) {
+  if (!statePath) return null;
+  const st = statSync(statePath);
+  const hit = stateJsonCache.get(statePath);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.parsed;
+  const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+  stateJsonCache.set(statePath, { mtimeMs: st.mtimeMs, size: st.size, parsed });
+  return parsed;
+}
+
 /** The main Bot on this host: Mac 鲸鱼 / 146 小欣, read from dscord's state, never hardcoded. */
 export function resolveMainBot(statePath) {
   try {
-    const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+    const parsed = readStateJson(statePath);
     const bots = parsed?.bots && typeof parsed.bots === 'object' ? Object.values(parsed.bots) : [];
     const mainBotIds = Array.isArray(parsed?.mainBotIds) ? parsed.mainBotIds.filter(id => typeof id === 'string') : [];
     const byId = new Map(bots.filter(bot => bot && typeof bot.id === 'string').map(bot => [bot.id, bot]));
@@ -253,7 +264,7 @@ export function resolveMainBot(statePath) {
 export function botNamesOf(statePath) {
   const map = new Map();
   try {
-    const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+    const parsed = readStateJson(statePath);
     const bots = parsed?.bots && typeof parsed.bots === 'object' ? Object.values(parsed.bots) : [];
     for (const bot of bots) {
       if (!bot || typeof bot.id !== 'string') continue;
@@ -274,7 +285,7 @@ export function botNamesOf(statePath) {
 /** The Bots on this host as { id, name, sessionId }, for resolving @mentions. */
 export function botRoster(statePath) {
   try {
-    const parsed = JSON.parse(readFileSync(statePath, 'utf8'));
+    const parsed = readStateJson(statePath);
     const bots = parsed?.bots && typeof parsed.bots === 'object' ? Object.values(parsed.bots) : [];
     const mainIds = new Set(Array.isArray(parsed?.mainBotIds) ? parsed.mainBotIds : []);
     return bots

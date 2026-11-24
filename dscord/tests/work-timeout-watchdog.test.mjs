@@ -125,9 +125,24 @@ test('graceTimeout keeps active worker running when not extended, but stops trul
   }
 });
 
-test('Main Bot can cross-Bot cancel an unhealthy worker task', async () => {
+test('Main Bot can cross-Bot cancel an unhealthy worker task, but non-main peer cannot', async () => {
   const { mainCore, workerCore, cancels } = makeHarness();
+  const peerCore = new WorkCore({
+    ctx: { tools: { guard() { return () => {}; } }, on() { return () => {}; }, sessionController: { async prompt() {} } },
+    native: mainCore.native,
+    node: { nativeBotId: 'bot-peer', localpart: 'peer', directory: '/tmp/test-peer' },
+    state: { tasks: {}, frontNotes: [] },
+    save: async () => {},
+  });
   try {
+    const denied = await peerCore.cancel('T-test0001');
+    assert.match(denied, /只有主 Bot 才能跨 Bot/);
+    assert.equal(workerCore.state.tasks['T-test0001'].status, 'running');
+    assert.equal(cancels.length, 0);
+
+    const deniedExtend = await peerCore.extend('T-test0001', { minutes: 60 });
+    assert.match(deniedExtend, /只有主 Bot 才能跨 Bot/);
+
     const res = await mainCore.cancel('T-test0001');
     assert.equal(res, 'T-test0001 已取消。');
     assert.equal(workerCore.state.tasks['T-test0001'].status, 'cancelled');

@@ -339,13 +339,21 @@ export function installNativeMemory(rt) {
     work.finally(() => reviewing.delete(botId)).catch(() => {});
     return callerSignal ? waitForReview(work, signal) : work;
   }
+  const reviewBackoffUntil = new Map();
+  const isBillingOrQuotaError = error => isModelQuotaFailure(error) || /\b402\b|Payment Required|RESOURCE_EXHAUSTED|credits are depleted|quota/i.test(String(error?.message || error || ''));
   function schedule(botId, delayMs = config.memoryReviewDelayMs ?? 2000) {
     if (!automaticReviewAllowed(config, botId) || disposed) return;
+    if (Date.now() < (reviewBackoffUntil.get(botId) || 0)) return;
     clearTimeout(timers.get(botId));
     const timer = setTimeout(() => { timers.delete(botId); void flush(botId, { automatic: true }).catch(error => {
       if (disposed || reviewStop.signal.aborted) return;
       memory.errors.push({ operation: 'review', botId, error: error.message, at: Date.now() }); rt.warn('ds-bot: source memory review failed: %s', error.message);
-      if (!disposed && !isModelQuotaFailure(error)) {
+      if (isBillingOrQuotaError(error)) {
+        // Back off 30 minutes on 402/billing/quota exhaustion so we don't spam logs on every event.
+        reviewBackoffUntil.set(botId, Date.now() + 30 * 60_000);
+        return;
+      }
+      if (!disposed) {
         const retry = setTimeout(() => { timers.delete(botId); schedule(botId); }, 60000);
         retry.unref?.(); timers.set(botId, retry);
       }

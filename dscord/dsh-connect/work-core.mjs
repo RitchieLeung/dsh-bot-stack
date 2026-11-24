@@ -533,10 +533,23 @@ export class WorkCore {
     return list.map(task => `${task.id} ${task.status} ${task.title}${task.progress && !ended(task) ? ` · 进度：${task.progress}` : ''}${task.summary ? ` · ${task.summary.slice(0, 300)}` : ''}`).join('\n');
   }
 
+  /** True when this Bot is configured as a Main Bot in the native kernel state. */
+  async isMainBot() {
+    const myId = this.node?.nativeBotId;
+    if (!myId || typeof this.native?.state !== 'function') return false;
+    const state = await this.native.state().catch(() => null);
+    if (!state) return false;
+    if (state.mainBotId === myId) return true;
+    return Array.isArray(state.mainBotIds) && state.mainBotIds.includes(myId);
+  }
+
   async cancel(id) {
     const hit = this.resolveTask(id);
     if (!hit) return `没有任务 ${id}。`;
-    if (hit.core !== this) return hit.core.cancel(id);
+    if (hit.core !== this) {
+      if (!await this.isMainBot()) return '只有主 Bot 才能跨 Bot 取消其他同事的工作者任务。';
+      return hit.core.cancel(id);
+    }
     const task = hit.task;
     if (ended(task)) return `${id} 已经结束（${task.status}）。`;
     if (task.sessionId) await this.native.agent(task.sessionId).then(agent => agent.cancel({ kind: 'user' })).catch(() => {});
@@ -547,7 +560,10 @@ export class WorkCore {
   async note(id, text) {
     const hit = this.resolveTask(id);
     if (!hit || ended(hit.task)) return `没有进行中的任务 ${id}。`;
-    if (hit.core !== this) return hit.core.note(id, text);
+    if (hit.core !== this) {
+      if (!await this.isMainBot()) return '只有主 Bot 才能跨 Bot 向其他同事的工作者发送指令。';
+      return hit.core.note(id, text);
+    }
     const task = hit.task;
     if (task.status === 'queued') { task.brief += `\n\n补充：${text}`; await this.save(); return '已补充到排队中的任务说明。'; }
     const answer = Boolean(task.waiting);
@@ -562,7 +578,10 @@ export class WorkCore {
   async extend(id, { minutes = 60, reason = '' } = {}) {
     const hit = this.resolveTask(id);
     if (!hit || ended(hit.task)) return `没有进行中的任务 ${id}。`;
-    if (hit.core !== this) return hit.core.extend(id, { minutes, reason });
+    if (hit.core !== this) {
+      if (!await this.isMainBot()) return '只有主 Bot 才能跨 Bot 为其他同事的工作者续期。';
+      return hit.core.extend(id, { minutes, reason });
+    }
     const task = hit.task;
     const mins = Math.max(10, Math.min(240, Math.round(Number(minutes) || 60)));
     const now = Date.now();

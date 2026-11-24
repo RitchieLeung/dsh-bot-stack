@@ -179,12 +179,24 @@ export class CodexEngine {
 
   async prompt(thread, blocks, { signal }) {
     const peer = await this.ensure()
-    const reply = await peer.request('turn/start', {
+    const payload = {
       threadId: thread.threadId,
       input: blocks.map(block => block.type === 'image' ? { type: 'image', url: block.url ?? block.data } : { type: 'text', text: block.text ?? '' }),
-    }, { signal, timeout: 0 })
-    thread.turnId = reply?.turn?.id ?? reply?.id
-    return thread.turnId
+    }
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const reply = await peer.request('turn/start', payload, { signal, timeout: 0 })
+        thread.turnId = reply?.turn?.id ?? reply?.id
+        return thread.turnId
+      } catch (error) {
+        const msg = String(error?.message || error || '')
+        if (attempt < 3 && !signal?.aborted && /ActiveTurnNotSteerable|turn_kind:\s*Compact/i.test(msg)) {
+          await new Promise(resolve => setTimeout(resolve, 2_000 * (attempt + 1)))
+          continue
+        }
+        throw error
+      }
+    }
   }
 
   async steer(thread, text) {
