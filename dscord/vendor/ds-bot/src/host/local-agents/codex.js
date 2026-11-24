@@ -88,7 +88,9 @@ export class CodexEngine {
             })
           }
         }
-        else if (method === 'item/started' && item.type !== undefined) thread.push({ type: 'activity', text: `▸ ${activityOf(item)}` })
+        else if (method === 'item/started' && item.type !== undefined) {
+          thread.push({ type: 'activity', text: `▸ ${activityOf(item)}`, ...(isLocalExecItem(item) ? { localExec: true } : {}) })
+        }
         break
       }
       case 'turn/completed': {
@@ -100,8 +102,15 @@ export class CodexEngine {
       }
       case 'thread/tokenUsage/updated': {
         if (thread === undefined) break
-        const usage = normalizeCodexTokenUsage(params?.tokenUsage ?? params?.usage)
-        if (usage !== undefined) thread.push({ type: 'usage', usage })
+        const raw = params?.tokenUsage ?? params?.usage
+        const usage = normalizeCodexTokenUsage(raw)
+        const cw = Number(raw?.modelContextWindow ?? raw?.contextWindow ?? 0) || 0
+        if (usage !== undefined) thread.push({ type: 'usage', usage, ...(cw > 0 ? { contextWindow: cw } : {}) })
+        break
+      }
+      case 'thread/compacted': {
+        if (thread === undefined) break
+        thread.push({ type: 'compacted' })
         break
       }
       default: break
@@ -177,6 +186,12 @@ export class CodexEngine {
     await this.peer?.request('turn/steer', { threadId: thread.threadId, input: [{ type: 'text', text }] }, { timeout: 15_000 }).catch(() => {})
   }
 
+  async compact(thread) {
+    if (!this.peer || !thread?.threadId) return false
+    await this.peer.request('thread/compact/start', { threadId: thread.threadId }, { timeout: 120_000 })
+    return true
+  }
+
   cancel(thread) {
     this.peer?.request('turn/interrupt', { threadId: thread.threadId, turnId: thread.turnId }, { timeout: 15_000 }).catch(() => {})
   }
@@ -226,6 +241,17 @@ export function normalizeCodexTokenUsage(raw) {
     ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
     ...(reasoning > 0 ? { reasoningTokens: reasoning } : {}),
   }
+}
+
+const LOCAL_EXEC_TYPES = new Set([
+  'commandExecution', 'command_execution', 'fileChange', 'file_change',
+  'customToolCall', 'custom_tool_call', 'webSearch', 'web_search',
+])
+export function isLocalExecItem(item) {
+  if (!item || typeof item !== 'object') return false
+  if (LOCAL_EXEC_TYPES.has(item.type)) return true
+  if ((item.type === 'mcpToolCall' || item.type === 'mcp_tool_call') && item.server !== 'dsbot') return true
+  return false
 }
 
 const activityOf = item => {

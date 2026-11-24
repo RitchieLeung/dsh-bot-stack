@@ -9,8 +9,9 @@ import { textOf } from '../text.js'
 import { engineOf, cliMode } from './engines.js'
 import { LoopbackMcp } from './mcp.js'
 import { isContextMessage, sourceLabel, sourceText } from '../message-source.js'
+import { DEFAULT_CONTEXT_WINDOW, trackFrontLocalExec, maybeAutoCompact } from './budget.js'
 
-export const DEFAULT_CONTEXT_WINDOW = 200_000
+export { DEFAULT_CONTEXT_WINDOW }
 // The replay window when a CLI session is new or its resume failed.
 const REPLAY_MESSAGES = 12
 const REPLAY_BYTES = 24 * 1024
@@ -367,6 +368,9 @@ export class LocalAgentAdapter extends LlmAdapter {
       return
     }
     live.state = 'running'
+    live.turnLocalExecs = 0
+    live.frontLimitWarned = false
+    live.frontLimitInterrupted = false
     try {
       Promise.resolve(live.engine.prompt(live.engineSession, [{ type: 'text', text }], { signal }))
         .catch(error => live.push({ type: 'error', error }))
@@ -433,6 +437,7 @@ export class LocalAgentAdapter extends LlmAdapter {
         }
         case 'thought':
         case 'activity': {
+          if (event.type === 'activity' && event.localExec === true) trackFrontLocalExec(live, this.deps.rt)
           // An activity line stands on its own line of the reasoning, which is
           // how the chat tells it from the thought around it.
           const text = event.type === 'activity' ? `${thinkBuf === '' || thinkBuf.endsWith('\n') ? '' : '\n'}${event.text}\n` : event.text
@@ -445,7 +450,18 @@ export class LocalAgentAdapter extends LlmAdapter {
           yield { type: 'reasoning-delta', index: thinkIndex, text }
           break
         }
-        case 'usage': yield { type: 'usage', usage: event.usage }; break
+        case 'usage': {
+          const promptTokens = (event.usage?.inputTokens || 0) + (event.usage?.cacheReadInputTokens || 0)
+          if (promptTokens > 0) live.lastPromptTokens = promptTokens
+          if (event.contextWindow > 0) live.contextWindow = event.contextWindow
+          yield { type: 'usage', usage: event.usage }
+          break
+        }
+        case 'compacted': {
+          live.lastPromptTokens = 0
+          live.compacting = false
+          break
+        }
         case 'call': {
           yield* closeBlocks()
           live.state = 'suspended'
@@ -475,6 +491,7 @@ export class LocalAgentAdapter extends LlmAdapter {
             this.sendInput(live, next, options.signal)
             break
           }
+          void maybeAutoCompact(live, this.deps.rt)
           yield { type: 'finish', reason: { kind: 'stop' } }
           return
         }
