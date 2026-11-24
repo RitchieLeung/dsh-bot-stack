@@ -941,10 +941,23 @@ export function openIssueStore({ dbPath, attachmentsDir = null }) {
    * `id` depends on `dependsOn` (B must be done before A can be done).
    * Rejects self-links and cycles: A→B is refused when B already reaches A.
    */
+  function ancestorIds(id) {
+    const seen = new Set();
+    let cur = selectIssue.get(id)?.parentId || null;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      cur = selectIssue.get(cur)?.parentId || null;
+    }
+    return seen;
+  }
+
   function link(id, dependsOn) {
     const issue = requireIssue(id);
     const dep = requireIssue(dependsOn);
     if (issue.id === dep.id) throw failure('SELF_LINK', '事务不能依赖自己');
+    if (ancestorIds(issue.id).has(dep.id)) {
+      throw failure('PARENT_CHILD_DEP_CONFLICT', `${issueRef(issue)} 是 ${issueRef(dep)} 的子事务，不能依赖自己的父/祖先事务（父事务必须等子事务闭环，会形成死锁）`);
+    }
     if (dependsOnIds(dep.id).has(issue.id)) {
       throw failure('LINK_CYCLE', `会形成循环依赖：${issueRef(issue)} 依赖 ${issueRef(dep)}，而 ${issueRef(dep)} 已经（间接）依赖 ${issueRef(issue)}`);
     }

@@ -1011,3 +1011,23 @@ test('syncTask running worker does NOT pull an in_review issue back to dispatche
   assert.equal(after.status, 'in_review');
   store.close();
 });
+
+test('link refuses child/descendant depending on its own parent/ancestor (deadlock prevention)', () => {
+  const store = fresh();
+  const parent = store.create({ title: '父事务' });
+  const child = store.create({ title: '子事务', parentId: parent.id });
+  const grandchild = store.create({ title: '孙事务', parentId: child.id });
+  assert.throws(
+    () => store.link(child.id, parent.id),
+    err => err.code === 'PARENT_CHILD_DEP_CONFLICT',
+  );
+  assert.throws(
+    () => store.link(grandchild.id, parent.id),
+    err => err.code === 'PARENT_CHILD_DEP_CONFLICT',
+  );
+  // Sibling dependency is still allowed
+  const sibling = store.create({ title: '同级子事务', parentId: parent.id });
+  const linked = store.link(sibling.id, child.id);
+  assert.equal(linked.dependsOn.length, 1);
+  store.close();
+});
