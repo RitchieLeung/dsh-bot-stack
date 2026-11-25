@@ -24,6 +24,8 @@ export const FRONT_TOOLS = new Set([
   // 事务（issue）板：主 Bot 在前台直接管理 issue——建/列/读/流转/评论/指派/依赖。
   'issue_create', 'issue_list', 'issue_get', 'issue_update', 'issue_comment',
   'issue_assign', 'issue_link', 'issue_unlink',
+  // 经典模式直聊下的交互卡片（仅在无外部房间 origin.roomId 时放行）。
+  'ask_user', 'show_view',
 ]);
 // Workers do the work; they do not speak for the Bot or change the team.
 export const WORKER_DENY = new Set([
@@ -188,8 +190,11 @@ export class WorkCore {
 
   guard(exec) {
     const id = exec.agent?.session?.id ?? exec.agent?.id;
-    if (CARD_TOOLS.has(exec.name) && (this.frontSessions.has(id) || this.workerTask(id))) return CARD_REFUSAL;
-    if (this.workerTask(id) && WORKER_DENY.has(exec.name)) return '工作者只做事并用 work_report 汇报，不直接对外说话或改团队设置。';
+    const isWorker = Boolean(this.workerTask(id));
+    // Workers have no UI and external Matrix/IM room turns cannot see desktop
+    // cards; direct Classic Agent chat with the user CAN render ask_user/show_view.
+    if (CARD_TOOLS.has(exec.name) && (isWorker || (this.frontSessions.has(id) && Boolean(this.origin?.roomId)))) return CARD_REFUSAL;
+    if (isWorker && WORKER_DENY.has(exec.name)) return '工作者只做事并用 work_report 汇报，不直接对外说话或改团队设置。';
     if (this.frontSessions.has(id) && !FRONT_TOOLS.has(exec.name)) {
       const limit = this.frontMaxToolCalls();
       if (limit > 0) {
@@ -219,12 +224,6 @@ export class WorkCore {
     this.served.add(agent);
     for (const def of await compileTools(this.frontTools())) {
       try { tools.register(def); } catch { /* already registered on this Agent */ }
-    }
-    const served = (this.ctx.tools?.schemas?.(agent) || tools.schemas?.(agent) || []).map(tool => tool.name);
-    for (const name of served) {
-      if (!CARD_TOOLS.has(name)) continue;
-      // Desktop card tools have no UI in DSCord; everything else stays available so the front can handle quick tasks itself.
-      try { tools.restrict?.({ deny: [name] }); } catch { /* guarded */ }
     }
   }
 

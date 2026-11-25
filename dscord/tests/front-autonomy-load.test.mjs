@@ -87,14 +87,25 @@ test('front session can call external MCP and local tools directly while CARD_TO
     assert.equal(deniedOnFront.includes('bash'), false);
     assert.equal(deniedOnFront.includes('missiongo_list_issues'), false);
 
-    // Desktop card tools remain refused on front
+    // Desktop card tools are allowed in direct Classic Agent chat (no external roomId),
+    // refused during external Matrix/IM room turns, and refused on background workers.
+    assert.equal(
+      core.guard({ agent: { session: { id: 'front-session-1' } }, name: 'ask_user' }),
+      undefined,
+    );
+    core.origin = { roomId: '!room:local' };
     assert.equal(
       core.guard({ agent: { session: { id: 'front-session-1' } }, name: 'ask_user' }),
       CARD_REFUSAL,
     );
+    core.origin = null;
 
-    // Worker session still cannot use WORKER_DENY tools
+    // Worker session still cannot use CARD_TOOLS or WORKER_DENY tools
     core.state.tasks['T-worker1'] = { id: 'T-worker1', sessionId: 'worker-session-1', status: 'running' };
+    assert.equal(
+      core.guard({ agent: { session: { id: 'worker-session-1' } }, name: 'ask_user' }),
+      CARD_REFUSAL,
+    );
     assert.equal(
       typeof core.guard({ agent: { session: { id: 'worker-session-1' } }, name: 'dispatch_work' }),
       'string',
