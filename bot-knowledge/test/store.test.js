@@ -41,7 +41,7 @@ test('entries() returns active memories with bot name and sources', async () => 
 test('entries() filters by category', async () => {
   await withStore(async store => {
     assert.equal(store.entries({ botId: 'A', category: 'journal' }).total, 1);
-    assert.equal(store.entries({ botId: 'A', category: 'knowledge' }).total, 1);
+    assert.equal(store.entries({ botId: 'A', category: 'private' }).total, 1);
     assert.equal(store.entries({ botId: 'A', category: 'daily-report' }).total, 1);
   });
 });
@@ -121,6 +121,22 @@ test('a memory record without text does not break the page', async () => {
   try {
     const item = store.entries({ botId: 'A' }).items.find(i => i.id === 'bad');
     assert.equal(item.text, '（内容不可读）');
+    assert.equal(item.category, 'private');
+  } finally { store.close(); await fixture.cleanup(); }
+});
+
+test('SQL bot column takes precedence over stale json.botId to prevent ghost memories', async () => {
+  const fixture = await makeFixture();
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(fixture.dbPath);
+  db.prepare('INSERT INTO memories(id, bot, scope, status, json) VALUES (?, ?, ?, ?, ?)')
+    .run('migrated', 'A', 'team', 'active', JSON.stringify({ id: 'migrated', botId: 'LEGACY-OLD-ID', text: '公开博客', facets: ['knowledge'], scope: 'team', status: 'active', observedAt: 10 }));
+  db.close();
+  const store = openKnowledgeStore({ dbPath: fixture.dbPath, statePath: fixture.statePath });
+  try {
+    const item = store.entries({ botId: 'A', category: 'knowledge' }).items.find(i => i.id === 'migrated');
+    assert.ok(item);
+    assert.equal(item.botId, 'A');
     assert.equal(item.category, 'knowledge');
   } finally { store.close(); await fixture.cleanup(); }
 });

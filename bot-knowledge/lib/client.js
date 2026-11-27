@@ -13,12 +13,13 @@ window.__ModuleLoader__.load({
 
     const TABS = [
       { id: 'all', label: '全部' },
+      { id: 'private', label: '私有记忆' },
       { id: 'journal', label: '日记' },
-      { id: 'knowledge', label: '知识' },
+      { id: 'knowledge', label: '知识（公开）' },
       { id: 'daily-report', label: '日报' },
     ];
-    const CATEGORY_LABEL = { 'daily-report': '日报', journal: '日记', knowledge: '知识' };
-    const CATEGORY_TONE = { 'daily-report': 'daily-report', journal: 'journal', knowledge: 'knowledge' };
+    const CATEGORY_LABEL = { private: '私有记忆', journal: '日记', knowledge: '知识（公开）', 'daily-report': '日报' };
+    const CATEGORY_TONE = { private: 'private', journal: 'journal', knowledge: 'knowledge', 'daily-report': 'daily-report' };
     function avatarHue(name) {
       let hash = 0;
       for (const ch of String(name || '')) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
@@ -56,6 +57,7 @@ window.__ModuleLoader__.load({
 .bk-time{display:inline-flex;align-items:center;font-variant-numeric:tabular-nums}
 .bk-badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;line-height:1.5;white-space:nowrap;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
 .bk-badge::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;flex:none}
+.bk-badge[data-tone="private"]{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}
 .bk-badge[data-tone="knowledge"]{color:var(--dsw-alias-brand-primary);background:color-mix(in srgb, var(--dsw-alias-brand-primary) 11%, transparent)}
 .bk-badge[data-tone="journal"]{color:var(--dsw-alias-state-success-primary);background:color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent)}
 .bk-badge[data-tone="daily-report"]{color:var(--dsw-alias-state-warn-primary);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 15%, transparent)}

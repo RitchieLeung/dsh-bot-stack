@@ -71,7 +71,7 @@ function decodeRow(row, botName, sourceOf) {
     return {
       id: row.id, botId: row.bot, botName, text: UNREADABLE_TEXT, kind: '', predicate: '', facets: [],
       scope: row.scope || 'own', status: row.status || 'unknown', observedAt: null, topic: null,
-      category: 'knowledge', sources: [],
+      category: 'private', sources: [],
     };
   }
   const text = typeof record.text === 'string' && record.text.trim() ? record.text : UNREADABLE_TEXT;
@@ -80,7 +80,9 @@ function decodeRow(row, botName, sourceOf) {
   const sourceRefs = Array.isArray(record.sourceRefs) ? record.sourceRefs : [];
   return {
     id: row.id,
-    botId: typeof record.botId === 'string' ? record.botId : row.bot,
+    // Always trust the SQL `bot` column (which recall indexes on) so migrated
+    // rows whose JSON blob still holds an old botId never turn into ghost entries.
+    botId: (typeof row.bot === 'string' && row.bot) ? row.bot : (typeof record.botId === 'string' ? record.botId : ''),
     botName,
     text,
     kind: typeof record.kind === 'string' ? record.kind : '',
