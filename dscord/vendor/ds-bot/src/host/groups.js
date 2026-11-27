@@ -1048,7 +1048,9 @@ export function install(rt) {
           failed: round.failed.filter(name => names.includes(name)),
         })
       }
-      exec.concludeTurn?.()
+      // Do not concludeTurn here so the synthetic relayOrPass step immediately
+      // renders the collected Bot replies as readable assistant text in Classic
+      // Agent Mode (zero LLM calls; DS Bot mode still reads room.log).
       return JSON.stringify({ replies: round.replies, passed: round.passed, ...(round.failed.length > 0 ? { failed: round.failed } : {}) })
     },
   }))
@@ -1477,6 +1479,33 @@ export function install(rt) {
       const latest = [...options.messages].reverse()
         .find(message => message.role === 'assistant' || message.role === 'tool' || opens(message))
       if (latest?.role !== 'user') {
+        if (latest?.role === 'tool') {
+          let rendered = ''
+          try {
+            const parsed = JSON.parse(textOf(latest.content))
+            const items = Array.isArray(parsed?.replies) ? parsed.replies : []
+            const parts = []
+            for (const item of items) {
+              if (!item || typeof item !== 'object') continue
+              const who = item.name || item.botId || 'Bot'
+              if (!item.kind && typeof item.text === 'string' && item.text.trim()) {
+                parts.push(`**${who}**：\n${item.text.trim()}`)
+              } else if (item.kind === 'failed') {
+                parts.push(`**${who}（失败）**：${item.text || '执行失败'}`)
+              } else if (item.kind === 'working') {
+                parts.push(`_${who} 当前正在处理其他任务，暂未回复。_`)
+              } else if (item.kind === 'admin-passed') {
+                parts.push(`_${who} 本轮未发言。_`)
+              }
+            }
+            rendered = parts.join('\n\n---\n\n')
+          } catch { /* non-JSON tool result */ }
+          if (rendered) {
+            yield { type: 'block-start', index: 0, blockType: 'text' }
+            yield { type: 'text-delta', index: 0, text: rendered }
+            yield { type: 'block-end', index: 0, block: { type: 'text', text: rendered } }
+          }
+        }
         yield { type: 'finish', reason: { kind: 'stop' } }
         return
       }
